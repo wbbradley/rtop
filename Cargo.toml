@@ -1,0 +1,12 @@
+[package]
+name = "rtop"
+version = "0.1.0"
+edition = "2024"
+description = "A TUI process monitor with vim-style navigation, fuzzy search, and a process tree view."
+repository = "https://github.com/wbbradley/rtop"
+license = "MIT"
+readme = "README.md"
+keywords = ["tui", "top", "htop", "process", "monitor"]
+categories = ["command-line-utilities"]
+
+[dependencies]

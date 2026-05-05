@@ -1,0 +1,312 @@
+# rtop — Implementation Plan
+
+A TUI process monitor in the spirit of `top`/`htop`, with vim-style navigation, a fuzzy search box driving a load-sorted list, and a context-sensitive process tree below.
+
+## Architecture Reference
+
+Self-contained context so a developer picking up any phase has what they need.
+
+### Layout (top → bottom)
+
+1. **Search box** (3 rows incl. border) — single-line, scrolls horizontally. Initial focus.
+2. **Load view** (~13 rows: header + `LOAD_VIEW_VISIBLE_ROWS` data rows + border) — sorted-by-load list.
+3. **Tree pane** (remainder) — spine + subtree of the load view's selected process.
+4. **Status line** (1 row, no border): `[focus] [N/M procs] [sort: cpu] [paused?]   [load: x x x  mem: x/y GiB]   [error|hint]`.
+
+### Data flow
+
+Search box state is canonical. Load view filters/sorts off it. Tree shows spine + subtree of the load view's currently-selected process.
+
+### Search DSL
+
+- Prefixed terms (case-insensitive substring): `pid:`, `ppid:`, `user:`, `name:`, `cmd:`, `state:`.
+- Bare terms: nucleo fuzzy match against `name + " " + cmdline + " " + user`.
+- Space-separated terms = AND. No OR/negation in v1.
+- `pid:X` is special: exact equality, auto-scrolls + highlights the row in load view, does not filter the rest out. (All other prefixes filter normally.)
+
+### Refresh & threading
+
+- One sampler thread, one main/UI thread. No tokio. Channel: `crossbeam-channel` carrying `Arc<Snapshot>`.
+- Sampler ticks every `SAMPLE_INTERVAL` (default 1s). UI renders on union of {keypress, new snapshot, terminal resize}.
+- CPU% computed in sampler from `(prev_utime + prev_stime)` vs current; identity is `(pid, start_time)` to handle PID reuse.
+- `space` toggles sampling pause.
+
+### Process IR
+
+```rust
+struct ProcessId { pid: i32, start_time: u64 }  // identity
+
+struct Process {
+    id: ProcessId,
+    ppid: i32,
+    uid: u32,
+    user: String,        // resolved at sample time
+    name: String,        // /proc/<pid>/comm or basename of argv[0]
+    cmdline: Vec<String>,// full argv; empty for kernel threads
+    state: char,         // R/S/D/Z/T/I
+    rss_bytes: u64,
+    cpu_pct: Option<f32>,// None on first sample
+    cpu_time_total: Duration, // for TIME+ display
+    age: Duration,       // wall clock - start_time
+    is_kernel_thread: bool, // hint for renderer (Linux: ppid==2 chain)
+}
+
+struct Snapshot {
+    processes: Vec<Process>,
+    by_id: HashMap<ProcessId, usize>, // for fast lookup
+    sampled_at: Instant,
+    system: SystemStats, // load avg, mem total/used
+}
+```
+
+### Module layout
+
+`module.rs + module/submodule.rs` (no `mod.rs`).
+
+```
+src/
+  main.rs
+  consts.rs                 — all global constants (SAMPLE_INTERVAL, MIN_COLS, etc.)
+  app.rs                    — top-level app state + event loop
+  app/state.rs
+  app/event.rs              — Key/Snapshot/Resize event union
+  process.rs                — Process, ProcessId, Snapshot
+  source.rs                 — trait ProcessSource
+  source/linux.rs           — procfs-backed source (Phase 1)
+  source/macos.rs           — libproc-backed source (Phase 6)
+  sampler.rs                — sampler thread driver
+  search.rs
+  search/parser.rs          — DSL → Query AST
+  search/filter.rs          — Query + Snapshot → filtered indices
+  format.rs                 — bytes (KiB/MiB/GiB), age (1d4h/4h12m/12m32s/32s), TIME+
+  ui.rs                     — top-level draw routine
+  ui/search_box.rs
+  ui/load_view.rs
+  ui/tree_view.rs
+  ui/status_line.rs
+  ui/help_modal.rs
+  ui/signal_modal.rs
+```
+
+### Constants discipline
+
+No magic numbers anywhere. All tunables live in `consts.rs`:
+
+- `SAMPLE_INTERVAL: Duration` (1s)
+- `LOAD_VIEW_VISIBLE_ROWS: usize` (10)
+- `SCROLLOFF: usize` (3)
+- `MIN_COLS: u16` (80), `MIN_ROWS: u16` (24)
+- `ERROR_FLASH_DURATION: Duration` (3s)
+- `CPU_WARN_PCT: f32` (50.0), `CPU_DANGER_PCT: f32` (80.0)
+
+### Key bindings (full)
+
+| Context | Key | Action |
+|---|---|---|
+| any | `Ctrl-C` | quit |
+| any | `?` | open help modal |
+| any | `Tab` / `Shift-Tab` | cycle focus forward/backward (search → load → tree → search) |
+| any non-search | `/` | jump focus to search and clear it |
+| any non-search | `Esc` | return focus to search |
+| search | `Esc` | clear search if non-empty; otherwise no-op |
+| search | `Ctrl-n` / `Ctrl-p` | move load view selection without leaving search focus |
+| search | `Enter` | select first match (move focus to load view) |
+| load view | `j`/`k`/`gg`/`G` | navigate selection; scrolloff=`SCROLLOFF` |
+| load view | `Ctrl-d`/`Ctrl-u` | half-page selection move |
+| load view | `Enter` | drill: commit `pid:<X>` to search |
+| load view | `s` | cycle sort: CPU → RSS → TIME+ → AGE → CPU |
+| load view | `K` | open signal modal |
+| load view | `space` | toggle sampling pause |
+| tree | `j`/`k`/`gg`/`G` | navigate cursor (DFS order); scrolloff=`SCROLLOFF` |
+| tree | `Ctrl-d`/`Ctrl-u` | half-page viewport scroll |
+| tree | `Enter` | commit `pid:<X>` to search (drill) |
+| signal modal | `j`/`k` | pick signal |
+| signal modal | `Enter` | send signal |
+| signal modal | `Esc` | cancel |
+
+### Visual rules
+
+- ANSI 16 only in v1, no truecolor, no theming.
+- Selected row: reverse video.
+- CPU%: yellow > `CPU_WARN_PCT`, red > `CPU_DANGER_PCT`, dim < 1.
+- STATE colors: R=green, S=default, D=red, Z=red bold, T=yellow.
+- Kernel threads: dim gray throughout.
+- USER cyan when transitioning from parent's user (in tree pane).
+- Search prefix tokens (`pid:`, etc.): bold cyan in the input box.
+- Errors: red bold in status line right side, auto-clear after `ERROR_FLASH_DURATION`.
+
+### Display formatting
+
+- Bytes: `1.2GiB`, `345MiB`, `12KiB`. Binary units, exact terminology.
+- Age: largest two units, e.g. `1d4h`, `4h12m`, `12m32s`, `32s`. Never milliseconds.
+- TIME+: `1h23m` style, no centiseconds.
+- STATE: single char.
+- Unreadable cmdline → `[<comm>]` (kernel thread / ps aux convention).
+
+### CLI flags (clap, derive)
+
+- `--interval <secs>` overrides `SAMPLE_INTERVAL`.
+- `--filter <expr>` pre-populates search box.
+- `--no-kernel-threads` starts with kernel threads hidden.
+- `--version`, `--help`.
+
+### Crates
+
+`ratatui`, `crossterm`, `procfs` (Linux), `libproc` + `libc` (macOS, Phase 6), `crossbeam-channel`, `nucleo`, `clap` (derive), `nix` for `kill(2)`. All added via `cargo add`.
+
+### Out of v1 scope
+
+Threads, renice, kill-tree, multi-select, `cwd:` filter, search OR/negation, manual h/l fold ops in tree, runtime pane resize, config file, theming/truecolor.
+
+---
+
+## Next Up
+
+### Phase 1 — Linux read-only listing
+
+Establish the IR, sampler, and a minimal ratatui app that displays a load-sorted list. Cross-platform-ready (`trait ProcessSource`) but only Linux impl.
+
+**Deliverables:**
+- `consts.rs` populated with all constants enumerated in the architecture reference. Future phases reference constants only.
+- `process.rs`: `ProcessId`, `Process`, `Snapshot`, `SystemStats` types.
+- `source.rs`: `trait ProcessSource { fn snapshot(&mut self) -> Result<Snapshot>; }` plus a `cfg`-gated re-export of the platform-specific source.
+- `source/linux.rs`: `LinuxProcessSource` using `procfs`. Reads `/proc/<pid>/{stat,status,cmdline,comm}` and `/proc/{loadavg,meminfo}`. Resolves UID → username (cache results).
+- `sampler.rs`: spawns a thread that ticks every `SAMPLE_INTERVAL`, computes CPU% from previous snapshot, sends `Arc<Snapshot>` over a `crossbeam-channel` bounded(1) (drop oldest if UI is slow). Owns prev snapshot internally.
+- `app.rs` event loop: `select!` over crossterm key events and snapshot channel; quits on `Ctrl-C`.
+- `ui.rs` + `ui/load_view.rs`: render only the load view (whole screen for this phase), columns `PID USER CPU% RSS COMMAND`. Sorted by CPU%. No selection cursor yet.
+- `format.rs`: bytes (`KiB`/`MiB`/`GiB`), basic placeholder for age.
+- CLI scaffolding via clap: `--interval`, `--version`, `--help`.
+- Startup error handling: if `/proc` unreadable, print error to stderr and exit 1 before entering raw mode.
+
+**Tests (unit only):**
+- `format` byte/age formatters covering boundaries (999B, 1024B, 1MiB-1, etc.).
+- A `MockProcessSource` that returns canned snapshots, used to verify sampler delta calc and PID-reuse handling.
+- `LinuxProcessSource` smoke test guarded behind `cfg(target_os = "linux")` reading actual `/proc` and asserting non-empty.
+
+**Done when:** `cargo run` shows a live-updating load-sorted list of processes that doesn't flicker; `Ctrl-C` exits cleanly; CPU% shows `—` on first frame and real values from the second; `--interval 2` works.
+
+---
+
+### Phase 2 — Search + load view interactivity
+
+Add the search box, search DSL, fuzzy match, load-view selection, sort cycling, and pause.
+
+**Deliverables:**
+- `search/parser.rs`: parse query string into `Query { terms: Vec<Term> }` where `Term` is `Prefixed { field: Field, value: String }` or `Bare(String)`. Tokenize by whitespace; recognize known prefixes; fail open (unknown prefix becomes part of bare term).
+- `search/filter.rs`: apply `Query` to a `Snapshot` → ordered `Vec<usize>` of process indices. Bare terms compose into a single nucleo fuzzy haystack-per-process; prefixed terms are case-insensitive substring; AND across terms. `pid:X` does not filter — it's marked on the `Query` for the load view to interpret as auto-select.
+- `ui/search_box.rs`: bordered single-line input with horizontal scroll, prefix tokens highlighted bold cyan as user types.
+- `ui/load_view.rs`: add header row + selection cursor + `SCROLLOFF`-aware scrolling. Add full column set: `PID USER CPU% RSS TIME+ STATE AGE COMMAND`. COMMAND clipped to remaining width. STATE color-coded.
+- Pane layout: search box (top, 3 rows) + load view (rest). Tree pane is a placeholder for now.
+- Focus state machine: `Search`, `Load`. `Tab`/`Shift-Tab`/`Esc`/`/` per binding table.
+- Search-box-specific: `Ctrl-n`/`Ctrl-p` move load view selection; `Enter` jumps focus to load view at first match.
+- Load view: `j`/`k`/`gg`/`G`/`Ctrl-d`/`Ctrl-u` selection; `s` cycles sort; `space` toggles `paused` flag in app state (sampler keeps reading but its results are dropped in pause mode — alternative: signal sampler to skip; pick the simpler one and document).
+- `--filter <expr>` CLI flag pre-populates the search box.
+
+**Tests (unit only):**
+- Search parser: each prefix recognized, multi-term AND, unknown prefix folds to bare, edge cases (empty, trailing colon, etc.).
+- Filter: against a fixture `Snapshot`, exercise each prefix and fuzzy bare term. Assert `pid:X` returns full list with auto-select hint.
+
+**Done when:** typing `firefox` filters; typing `user:wbbradley` filters; typing `pid:1` highlights pid 1 without filtering; sort cycles with `s`; `space` freezes the view.
+
+---
+
+### Phase 3 — Tree pane
+
+Add the third pane: spine + subtree of the load view's selected process, with its own cursor and drill-via-Enter.
+
+**Deliverables:**
+- Tree algorithm: from a `Snapshot`, build `parent_to_children: HashMap<i32, Vec<usize>>`. For a selected pid, compute `visible: Vec<TreeNode>` = ancestors-spine + DFS of selected's subtree. `TreeNode { proc_idx, depth, gutter_kind: Spine|Branch|Leaf, is_last_child: bool }`.
+- `ui/tree_view.rs`: render visible nodes. Gutter chars (`├─`, `└─`, `│  `, `   `). Columns: `[gutter] PID CPU% RSS COMMAND`. USER inline only when it differs from parent's user.
+- Layout grows a third pane: search (3) / load (~13) / tree (remainder).
+- Focus state extended to `Search | Load | Tree`. Tab order: search → load → tree → search.
+- Tree cursor: separate from load view's cursor; reset to load-view-selected node when the load view's selection changes.
+- Tree key bindings: `j`/`k`/`gg`/`G`/`Ctrl-d`/`Ctrl-u` (selection vs viewport scroll as specified). `Enter` commits `pid:<X>` to search box.
+- `pid:X` semantics: load view auto-scrolls to that PID and highlights, does not filter. Tree updates via the load-view selection it triggers.
+- Performance: tree-build is O(N); cache by `(snapshot pointer, selected ProcessId)` so we don't rebuild on every keystroke.
+
+**Tests (unit only):**
+- Tree builder against a fixture snapshot with a known parent/child shape; assert visible-set membership and gutter kinds for representative nodes.
+- Cursor reset behavior on selection change.
+
+**Done when:** selecting a process in the load view shows its ancestors and descendants in the tree pane; tree j/k navigates within that view; Enter on a tree node sets `pid:` in the search box and re-anchors both panes.
+
+---
+
+### Phase 4 — Status line, help modal, empty/error states
+
+Polish the UX scaffolding around the three working panes.
+
+**Deliverables:**
+- `ui/status_line.rs`: layout `[focus] [N/M procs] [sort: <key>] [paused?]   [load: x x x  mem: x/y GiB]   [error|hint]`. Hint text is adaptive per focused pane (see binding table). Error/info messages flash for `ERROR_FLASH_DURATION` then revert to hint.
+- Status line takes 1 row at the bottom; load view height adjusted accordingly.
+- `ui/help_modal.rs`: centered, bordered, ~60×20. Three sections (search / load / tree), tabular layout. `?` toggles open; `Esc` closes. Help modal captures all keystrokes while open.
+- Empty-state for load view: when filter yields zero processes, render dim italic `no matches` centered in the load view's bordered area.
+- Terminal-too-small: if `terminal.size() < (MIN_COLS, MIN_ROWS)`, render a single centered message, skip pane drawing.
+- Error infrastructure: `app::state` carries an `Option<(String, Instant)>` for the current flash; UI checks expiry on each render.
+
+**Tests (unit only):**
+- Hint text helper: returns the right hint for a given focus enum.
+- Error flash timing: stale flashes clear after duration.
+
+**Done when:** `?` shows the bindings; resizing the terminal small shows the message and recovers when grown; an empty filter shows `no matches`; sort/focus changes are reflected in the status line.
+
+---
+
+### Phase 5 — Signal modal
+
+Add interactive process control: `K` opens a modal to send signals, with safeguards.
+
+**Deliverables:**
+- `ui/signal_modal.rs`: centered, bordered, shows target as `PID 1234  command line clipped to width` plus a vertical list of signals: `TERM` (default highlighted), `KILL`, `HUP`, `INT`, `USR1`, `USR2`, `STOP`, `CONT`. `j`/`k` to pick, `Enter` to send, `Esc` to cancel.
+- Target precedence: focused pane's cursor (load view selection if focus is search).
+- `K` from search-box / load-view / tree opens the modal.
+- Signal sending via `nix::sys::signal::kill(Pid, signal)`. On `EPERM` or `ESRCH`, set status-line error flash (e.g. `EPERM: signal SIGTERM to PID 1234 denied`).
+- Confirmation gate: if target PID is `1` or `std::process::id()` (self), pressing Enter requires a second `y` keypress (modal title changes to `confirm? (y/N)`).
+- Modal captures all keystrokes while open; sampling continues underneath.
+
+**Tests (unit only):**
+- Target-precedence helper given a focus + cursor combination.
+- "Needs confirm" predicate: PID 1, self-PID, otherwise false.
+
+**Done when:** `K` on a process you own sends the chosen signal; on a foreign process, the status line flashes a permission error; PID 1 demands confirmation; `Esc` from the modal returns to where focus was.
+
+---
+
+### Phase 6 — macOS backend
+
+Implement `MacOsProcessSource` so rtop runs on macOS.
+
+**Deliverables:**
+- `source/macos.rs`: enumerate processes via `sysctl(KERN_PROC_ALL)` (raw `kinfo_proc` array, via `libc`); for each pid, fetch cmdline via `proc_pidinfo`/`proc_pidpath` from the `libproc` crate, fetch CPU times via `proc_pid_rusage`, fetch start_time from `kinfo_proc`. Resolve UID → username via `getpwuid_r`.
+- Map results into the same `Process` IR. `is_kernel_thread = false` for all macOS processes (no equivalent of Linux's PID 2 subtree).
+- Cfg-gate `source/linux.rs` and `source/macos.rs` and the `pub use` in `source.rs`.
+- CI: enable the macOS job (drop `continue-on-error`).
+- Document macOS limitations in README (CPU% computation works the same; some kernel-only stats unavailable; signals work via `nix`).
+
+**Tests (unit only):**
+- macOS-guarded smoke test reading the live process list and asserting non-empty + that `getpid()` is present.
+
+**Done when:** `cargo run` on macOS produces the same UI behavior as Linux for the working features; CI passes both jobs.
+
+---
+
+### Phase 7 — Polish
+
+Visual and behavioral refinement to ship-quality.
+
+**Deliverables:**
+- Color rules per the architecture reference: CPU% thresholds, STATE colors, kernel thread dimming (Linux), USER cyan on parent transition, search prefix bold cyan.
+- Zombie rendering: STATE `Z` red bold; treat `cpu_pct = Some(0.0)`; show as normal in tree.
+- Kernel-thread handling: Linux backend marks `is_kernel_thread = true` for descendants of PID 2; renderer dims their rows.
+- Empty-cmdline fallback: render `[<comm>]` (already required in Phase 1; verify it surfaces correctly here once colors are in).
+- Age formatter polish: largest-two units, never milliseconds, right-aligned, fixed column width.
+- TIME+ formatter: simplified (`1h23m`, `12m45s`), no centiseconds.
+- `--no-kernel-threads`: app-level filter that excludes kernel threads at filter stage; respects flag at startup.
+- README: replace screenshot placeholder with a real screenshot; add a short feature-tour section.
+- Verify all magic numbers have been pulled into `consts.rs` (audit pass).
+
+**Tests (unit only):**
+- Age formatter boundaries (just-under-a-day, just-over-a-day, etc.).
+- `--no-kernel-threads` filter behavior.
+
+**Done when:** colors match spec, `chk` clean, README has a real screenshot, no magic numbers anywhere outside `consts.rs`.
