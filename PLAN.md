@@ -162,29 +162,6 @@ Threads, renice, kill-tree, multi-select, `cwd:` filter, search OR/negation, man
 
 ## Next Up
 
-### Phase 2 — Search + load view interactivity
-
-Add the search box, search DSL, fuzzy match, load-view selection, sort cycling, and pause.
-
-**Deliverables:**
-- `search/parser.rs`: parse query string into `Query { terms: Vec<Term> }` where `Term` is `Prefixed { field: Field, value: String }` or `Bare(String)`. Tokenize by whitespace; recognize known prefixes; fail open (unknown prefix becomes part of bare term).
-- `search/filter.rs`: apply `Query` to a `Snapshot` → ordered `Vec<usize>` of process indices. Bare terms compose into a single nucleo fuzzy haystack-per-process; prefixed terms are case-insensitive substring; AND across terms. `pid:X` does not filter — it's marked on the `Query` for the load view to interpret as auto-select.
-- `ui/search_box.rs`: bordered single-line input with horizontal scroll, prefix tokens highlighted bold cyan as user types.
-- `ui/load_view.rs`: add header row + selection cursor + `SCROLLOFF`-aware scrolling. Add full column set: `PID USER CPU% RSS TIME+ STATE AGE COMMAND`. COMMAND clipped to remaining width. STATE color-coded.
-- Pane layout: search box (top, 3 rows) + load view (rest). Tree pane is a placeholder for now.
-- Focus state machine: `Search`, `Load`. `Tab`/`Shift-Tab`/`Esc`/`/` per binding table.
-- Search-box-specific: `Ctrl-n`/`Ctrl-p` move load view selection; `Enter` jumps focus to load view at first match.
-- Load view: `j`/`k`/`gg`/`G`/`Ctrl-d`/`Ctrl-u` selection; `s` cycles sort; `space` toggles `paused` flag in app state (sampler keeps reading but its results are dropped in pause mode — alternative: signal sampler to skip; pick the simpler one and document).
-- `--filter <expr>` CLI flag pre-populates the search box.
-
-**Tests (unit only):**
-- Search parser: each prefix recognized, multi-term AND, unknown prefix folds to bare, edge cases (empty, trailing colon, etc.).
-- Filter: against a fixture `Snapshot`, exercise each prefix and fuzzy bare term. Assert `pid:X` returns full list with auto-select hint.
-
-**Done when:** typing `firefox` filters; typing `user:wbbradley` filters; typing `pid:1` highlights pid 1 without filtering; sort cycles with `s`; `space` freezes the view.
-
----
-
 ### Phase 3 — Tree pane
 
 Add the third pane: spine + subtree of the load view's selected process, with its own cursor and drill-via-Enter.

@@ -28,6 +28,22 @@ pub fn age(d: Duration) -> String {
     format!("{}s", d.as_secs())
 }
 
+// Phase 7 will refine the boundary set; this is the simplified Phase 2 helper
+// reused for both TIME+ and AGE rendering.
+pub fn time_plus(d: Duration) -> String {
+    let total = d.as_secs();
+    let h = total / 3600;
+    let m = (total % 3600) / 60;
+    let s = total % 60;
+    if h > 0 {
+        format!("{h}h{m:02}m")
+    } else if m > 0 {
+        format!("{m}m{s:02}s")
+    } else {
+        format!("{s}s")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -88,5 +104,25 @@ mod tests {
     fn age_seconds() {
         assert_eq!(age(Duration::from_secs(0)), "0s");
         assert_eq!(age(Duration::from_secs(42)), "42s");
+    }
+
+    #[test]
+    fn time_plus_zero() {
+        assert_eq!(time_plus(Duration::ZERO), "0s");
+    }
+
+    #[test]
+    fn time_plus_seconds() {
+        assert_eq!(time_plus(Duration::from_secs(45)), "45s");
+    }
+
+    #[test]
+    fn time_plus_minutes() {
+        assert_eq!(time_plus(Duration::from_secs(12 * 60 + 45)), "12m45s");
+    }
+
+    #[test]
+    fn time_plus_hours() {
+        assert_eq!(time_plus(Duration::from_secs(3600 + 23 * 60)), "1h23m");
     }
 }

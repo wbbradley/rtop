@@ -27,3 +27,21 @@ Stood up the IR, sampler, and a minimal ratatui app that displays a load-sorted 
 - `src/ui.rs` + `src/ui/load_view.rs`: load view renders `PID USER CPU% RSS COMMAND`; CPU%-desc sort with None last; CPU% renders `—` when None; cmdline empty falls back to `[<comm>]`.
 - 13 unit tests pass: `bytes` boundary cases, `fill_cpu_pct` (normal/zero-dt/PID-reuse/new-process), and a Linux smoke test that asserts `getpid()` is in the snapshot.
 - `chk` clean (fmt + clippy `-D warnings`); `cargo nextest run` green.
+
+## Phase 2 — Search + load view interactivity
+
+Wired up the search box, search DSL, fuzzy filter, load-view interactivity, sort cycling, and pause:
+
+- Added `nucleo-matcher` (0.3.1) via `cargo add` for synchronous per-keystroke fuzzy match. Documented refinement from the original `nucleo` crate listed in PLAN.md (we want `Matcher::fuzzy_match`, not the injection/orchestrator surface).
+- `src/consts.rs`: added `SEARCH_BOX_HEIGHT: u16 = 3` and `LOAD_VIEW_HEIGHT: u16 = 13`.
+- `src/format.rs`: added `time_plus(Duration)` (`1h23m` / `12m45s` / `45s`), reused for both TIME+ and AGE this phase. Phase 7 will refine.
+- `src/search.rs` + `src/search/parser.rs` + `src/search/filter.rs`: DSL (`pid:`, `ppid:`, `user:`, `name:`, `cmd:`, `state:` + bare fuzzy) parsed into `Query { terms, auto_select_pid }`, AND across terms; bare terms fuzzy-match against `name + " " + cmdline + " " + user`. `pid:` does not filter — it sets `auto_select_pid` and the load view scrolls/highlights to it. Sort dispatched on `SortKey` (CPU desc with None-last, RSS desc, TIME+ desc on `cpu_time_total`, AGE desc on `age`).
+- `src/app/event.rs`: `Focus { Search, Load }` and `SortKey { Cpu, Rss, TimePlus, Age }` with `next()` cycler and `label()` accessor.
+- `src/app/state.rs`: `App` now carries `focus`, `query_text`, `query`, `paused`, `sort`, `load_cursor`, `load_view_offset`, `filtered_indices`, `pending_g`. Constructor `App::new(initial_filter)` parses the initial filter. `refilter()` reparses, refilters, honors `auto_select_pid`, and clamps the cursor.
+- `src/app.rs`: focus-aware `handle_key` dispatcher. Search focus accepts printable input, Backspace, Esc (clears non-empty query), Tab/Shift-Tab → Load, Enter → Load (cursor=0), Ctrl-n/Ctrl-p move load cursor without leaving search. Load focus accepts j/k/G, gg (two-key chord via `pending_g`), Ctrl-d/Ctrl-u half-page, `s` to cycle sort, space to toggle pause, `/` clears + jumps to search, Esc/Tab/Shift-Tab return to search, Enter drills with `pid:<X>`. Pause is implemented as the main thread ignoring incoming snapshots while `paused` is set.
+- `src/ui.rs`: vertical layout split into search (3) / load (13) / tree (Min(0)) with a tree placeholder block. Loading state shows in the load pane until the first snapshot arrives.
+- `src/ui/search_box.rs`: bordered single-line input with horizontal scroll keeping the cursor visible; prefix tokens (`pid:` etc.) highlighted bold cyan; cursor only drawn when search has focus.
+- `src/ui/load_view.rs`: full column set (PID/USER/CPU%/RSS/TIME+/STATE/AGE/COMMAND); STATE color-coded (R green, D red, Z red bold, T yellow, others default); selected row reverse video; `SCROLLOFF`-aware viewport offset clamp computed against actual rendered visible rows (capped at `LOAD_VIEW_VISIBLE_ROWS`).
+- `src/main.rs`: added `--filter <expr>` CLI flag (clap derive); threaded through `app::run`.
+- 24 new unit tests (37 total) cover parser edge cases (empty, whitespace, prefix recognition, pid-as-int vs fail-open, embedded colon, trailing colon, multi-term AND, unknown prefix), filter behavior against a 5-process fixture (identity, user/name/state filters, bare fuzzy `firef`→firefox, two-term AND, `pid:` returns full list, `ppid:` filters normally), `time_plus` boundaries, and `SortKey` cycling/labels.
+- `chk` clean; `cargo nextest run` green.

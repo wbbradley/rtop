@@ -9,6 +9,7 @@ mod consts;
 mod format;
 mod process;
 mod sampler;
+mod search;
 mod source;
 mod ui;
 
@@ -20,6 +21,10 @@ struct Cli {
     /// Sample interval in seconds.
     #[arg(long, default_value_t = 1.0)]
     interval: f64,
+
+    /// Pre-populate the search box with this expression.
+    #[arg(long, default_value = "")]
+    filter: String,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -34,7 +39,7 @@ fn main() -> anyhow::Result<()> {
     install_panic_hook();
 
     let rx = sampler::spawn(source, interval);
-    app::run(rx)
+    app::run(rx, cli.filter)
 }
 
 fn install_panic_hook() {
