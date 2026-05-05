@@ -11,6 +11,7 @@ use crate::{
 
 pub mod load_view;
 pub mod search_box;
+pub mod tree_view;
 
 pub fn draw(frame: &mut Frame, app: &App) {
     let area = frame.area();
@@ -37,7 +38,5 @@ pub fn draw(frame: &mut Frame, app: &App) {
         load_view::render(frame, chunks[1], app);
     }
 
-    // Tree placeholder — full implementation in Phase 3.
-    let tree_block = Block::bordered().title(" tree ");
-    frame.render_widget(tree_block, chunks[2]);
+    tree_view::render(frame, chunks[2], app);
 }

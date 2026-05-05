@@ -45,3 +45,16 @@ Wired up the search box, search DSL, fuzzy filter, load-view interactivity, sort
 - `src/main.rs`: added `--filter <expr>` CLI flag (clap derive); threaded through `app::run`.
 - 24 new unit tests (37 total) cover parser edge cases (empty, whitespace, prefix recognition, pid-as-int vs fail-open, embedded colon, trailing colon, multi-term AND, unknown prefix), filter behavior against a 5-process fixture (identity, user/name/state filters, bare fuzzy `firef`→firefox, two-term AND, `pid:` returns full list, `ppid:` filters normally), `time_plus` boundaries, and `SortKey` cycling/labels.
 - `chk` clean; `cargo nextest run` green.
+
+## Phase 3 — Tree pane
+
+Added the third pane below the load view: spine of ancestors + DFS of the load-view-selected process's subtree, with its own cursor and `Enter`-drill.
+
+- `src/tree.rs`: pure data layer with `GutterKind { Spine, Branch, Leaf }` and `TreeNode { proc_idx, depth, gutter_kind, is_last_child, ancestors_last }`. Helpers `build_pid_to_idx`, `build_parent_to_children` (children sorted by pid for deterministic rendering), and `build_visible(snap, p2c, pid_to_idx, selected)`. The chain walk defends against `ppid == 0`, self-parent cycles, and orphans whose parent disappeared mid-sample. DFS pushes/pops `is_last` onto a working `ancestors_last` stack.
+- `src/app/event.rs`: `Focus` extended with `Tree` variant.
+- `src/app/state.rs`: `App` carries `tree_visible`, `tree_cursor`, `tree_offset`, `tree_cache_key: Option<(Arc-ptr-as-usize, ProcessId)>`, `tree_cursor_id`. `selected_process_id()` helper. `ensure_tree_built()` short-circuits via the cache key, otherwise rebuilds; the cursor jumps to the newly-selected node when the load-view selection changes, and re-anchors by `tree_cursor_id` across snapshot ticks when selection is unchanged. `adjust_tree_offset_for_scrolloff()` mirrors the load-view variant.
+- `src/app.rs`: `run_loop` calls `ensure_tree_built()` before each `terminal.draw`. `handle_key` dispatches Tree focus to `handle_tree_key`. Tab/BackTab cycles updated: Search → Load → Tree → Search. Tree handler implements `j`/`k`/`gg`/`G`/`Ctrl-d`/`Ctrl-u` against `tree_visible.len()` (half-page reuses `LOAD_VIEW_VISIBLE_ROWS / 2`), `Esc`/`Tab` → Search, `BackTab` → Load, `/` clears query and jumps to Search, `Enter` commits `pid:<X>` to the search box and refilters.
+- `src/ui.rs`: replaced the placeholder `tree` block with `tree_view::render`. `mod tree;` added in `main.rs`.
+- `src/ui/tree_view.rs`: renders a `Paragraph<Vec<Line>>` per visible row in the format `{pid:>7} {cpu:>5} {rss:>8}  {gutter}{command}` plus an inline cyan `[user]` when the node's user differs from its parent's. Gutter glyphs are `│  ` / `   ` per ancestor column followed by `├─` / `└─` connector. Selected row uses reverse video. Diverged from PLAN.md's literal column ordering — fixed-width PID/CPU%/RSS come before the variable-width gutter so numeric columns stay aligned.
+- 7 new unit tests (44 total): four `build_visible` cases (root / mid / leaf / missing selection), `ancestors_last_flags_branch` exercising the `[true, false]` flag sequence on a five-process fixture, plus two `App::ensure_tree_built` tests for cursor reset on selection change and cursor preservation across snapshot ticks.
+- `chk` clean; `cargo nextest run` green (44 passed).

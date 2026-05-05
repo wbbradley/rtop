@@ -31,6 +31,7 @@ fn run_loop(
     let mut app = App::new(initial_filter);
 
     loop {
+        app.ensure_tree_built();
         terminal
             .draw(|f| ui::draw(f, &app))
             .context("failed to draw frame")?;
@@ -81,6 +82,7 @@ fn handle_key(app: &mut App, k: KeyEvent) {
     match app.focus {
         Focus::Search => handle_search_key(app, k),
         Focus::Load => handle_load_key(app, k),
+        Focus::Tree => handle_tree_key(app, k),
     }
 }
 
@@ -102,7 +104,7 @@ fn handle_search_key(app: &mut App, k: KeyEvent) {
             app.refilter();
         }
         KeyCode::Tab => app.focus = Focus::Load,
-        KeyCode::BackTab => app.focus = Focus::Load,
+        KeyCode::BackTab => app.focus = Focus::Tree,
         KeyCode::Enter => {
             app.focus = Focus::Load;
             app.load_cursor = 0;
@@ -158,11 +160,70 @@ fn handle_load_key(app: &mut App, k: KeyEvent) {
         KeyCode::Esc => {
             app.focus = Focus::Search;
         }
-        KeyCode::Tab | KeyCode::BackTab => {
+        KeyCode::Tab => {
+            app.focus = Focus::Tree;
+        }
+        KeyCode::BackTab => {
             app.focus = Focus::Search;
         }
         KeyCode::Enter => {
             if let Some(pid) = current_selected_pid(app) {
+                app.query_text = format!("pid:{pid}");
+                app.refilter();
+            }
+        }
+        _ => {}
+    }
+}
+
+fn handle_tree_key(app: &mut App, k: KeyEvent) {
+    let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
+
+    let was_pending_g = app.pending_g;
+    app.pending_g = false;
+
+    match k.code {
+        KeyCode::Char('j') => move_tree_cursor(app, 1),
+        KeyCode::Char('k') => move_tree_cursor(app, -1),
+        KeyCode::Char('g') => {
+            if was_pending_g {
+                app.tree_cursor = 0;
+                update_tree_cursor_id(app);
+                app.adjust_tree_offset_for_scrolloff(usize::MAX);
+            } else {
+                app.pending_g = true;
+            }
+        }
+        KeyCode::Char('G') => {
+            let len = app.tree_visible.len();
+            app.tree_cursor = len.saturating_sub(1);
+            update_tree_cursor_id(app);
+            app.adjust_tree_offset_for_scrolloff(usize::MAX);
+        }
+        KeyCode::Char('d') if ctrl => {
+            let half = tree_half_page();
+            move_tree_cursor(app, half as isize);
+        }
+        KeyCode::Char('u') if ctrl => {
+            let half = tree_half_page();
+            move_tree_cursor(app, -(half as isize));
+        }
+        KeyCode::Char('/') => {
+            app.query_text.clear();
+            app.focus = Focus::Search;
+            app.refilter();
+        }
+        KeyCode::Esc => {
+            app.focus = Focus::Search;
+        }
+        KeyCode::Tab => {
+            app.focus = Focus::Search;
+        }
+        KeyCode::BackTab => {
+            app.focus = Focus::Load;
+        }
+        KeyCode::Enter => {
+            if let Some(pid) = current_tree_cursor_pid(app) {
                 app.query_text = format!("pid:{pid}");
                 app.refilter();
             }
@@ -191,4 +252,41 @@ fn current_selected_pid(app: &App) -> Option<i32> {
     let snap = app.latest.as_deref()?;
     let &idx = app.filtered_indices.get(app.load_cursor)?;
     snap.processes.get(idx).map(|p| p.id.pid)
+}
+
+fn move_tree_cursor(app: &mut App, delta: isize) {
+    if app.tree_visible.is_empty() {
+        return;
+    }
+    let len = app.tree_visible.len() as isize;
+    let cur = app.tree_cursor as isize;
+    let new = (cur + delta).clamp(0, len - 1);
+    app.tree_cursor = new as usize;
+    update_tree_cursor_id(app);
+    app.adjust_tree_offset_for_scrolloff(usize::MAX);
+}
+
+fn update_tree_cursor_id(app: &mut App) {
+    let snap = match app.latest.as_deref() {
+        Some(s) => s,
+        None => {
+            app.tree_cursor_id = None;
+            return;
+        }
+    };
+    app.tree_cursor_id = app
+        .tree_visible
+        .get(app.tree_cursor)
+        .map(|n| snap.processes[n.proc_idx].id);
+}
+
+fn tree_half_page() -> usize {
+    use crate::consts::LOAD_VIEW_VISIBLE_ROWS;
+    (LOAD_VIEW_VISIBLE_ROWS / 2).max(1)
+}
+
+fn current_tree_cursor_pid(app: &App) -> Option<i32> {
+    let snap = app.latest.as_deref()?;
+    let n = app.tree_visible.get(app.tree_cursor)?;
+    Some(snap.processes[n.proc_idx].id.pid)
 }

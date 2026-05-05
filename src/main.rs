@@ -11,6 +11,7 @@ mod process;
 mod sampler;
 mod search;
 mod source;
+mod tree;
 mod ui;
 
 use source::ProcessSource;

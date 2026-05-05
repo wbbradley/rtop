@@ -162,28 +162,6 @@ Threads, renice, kill-tree, multi-select, `cwd:` filter, search OR/negation, man
 
 ## Next Up
 
-### Phase 3 — Tree pane
-
-Add the third pane: spine + subtree of the load view's selected process, with its own cursor and drill-via-Enter.
-
-**Deliverables:**
-- Tree algorithm: from a `Snapshot`, build `parent_to_children: HashMap<i32, Vec<usize>>`. For a selected pid, compute `visible: Vec<TreeNode>` = ancestors-spine + DFS of selected's subtree. `TreeNode { proc_idx, depth, gutter_kind: Spine|Branch|Leaf, is_last_child: bool }`.
-- `ui/tree_view.rs`: render visible nodes. Gutter chars (`├─`, `└─`, `│  `, `   `). Columns: `[gutter] PID CPU% RSS COMMAND`. USER inline only when it differs from parent's user.
-- Layout grows a third pane: search (3) / load (~13) / tree (remainder).
-- Focus state extended to `Search | Load | Tree`. Tab order: search → load → tree → search.
-- Tree cursor: separate from load view's cursor; reset to load-view-selected node when the load view's selection changes.
-- Tree key bindings: `j`/`k`/`gg`/`G`/`Ctrl-d`/`Ctrl-u` (selection vs viewport scroll as specified). `Enter` commits `pid:<X>` to search box.
-- `pid:X` semantics: load view auto-scrolls to that PID and highlights, does not filter. Tree updates via the load-view selection it triggers.
-- Performance: tree-build is O(N); cache by `(snapshot pointer, selected ProcessId)` so we don't rebuild on every keystroke.
-
-**Tests (unit only):**
-- Tree builder against a fixture snapshot with a known parent/child shape; assert visible-set membership and gutter kinds for representative nodes.
-- Cursor reset behavior on selection change.
-
-**Done when:** selecting a process in the load view shows its ancestors and descendants in the tree pane; tree j/k navigates within that view; Enter on a tree node sets `pid:` in the search box and re-anchors both panes.
-
----
-
 ### Phase 4 — Status line, help modal, empty/error states
 
 Polish the UX scaffolding around the three working panes.

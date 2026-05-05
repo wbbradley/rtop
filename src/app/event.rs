@@ -2,6 +2,7 @@
 pub enum Focus {
     Search,
     Load,
+    Tree,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
