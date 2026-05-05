@@ -162,31 +162,6 @@ Threads, renice, kill-tree, multi-select, `cwd:` filter, search OR/negation, man
 
 ## Next Up
 
-### Phase 1 — Linux read-only listing
-
-Establish the IR, sampler, and a minimal ratatui app that displays a load-sorted list. Cross-platform-ready (`trait ProcessSource`) but only Linux impl.
-
-**Deliverables:**
-- `consts.rs` populated with all constants enumerated in the architecture reference. Future phases reference constants only.
-- `process.rs`: `ProcessId`, `Process`, `Snapshot`, `SystemStats` types.
-- `source.rs`: `trait ProcessSource { fn snapshot(&mut self) -> Result<Snapshot>; }` plus a `cfg`-gated re-export of the platform-specific source.
-- `source/linux.rs`: `LinuxProcessSource` using `procfs`. Reads `/proc/<pid>/{stat,status,cmdline,comm}` and `/proc/{loadavg,meminfo}`. Resolves UID → username (cache results).
-- `sampler.rs`: spawns a thread that ticks every `SAMPLE_INTERVAL`, computes CPU% from previous snapshot, sends `Arc<Snapshot>` over a `crossbeam-channel` bounded(1) (drop oldest if UI is slow). Owns prev snapshot internally.
-- `app.rs` event loop: `select!` over crossterm key events and snapshot channel; quits on `Ctrl-C`.
-- `ui.rs` + `ui/load_view.rs`: render only the load view (whole screen for this phase), columns `PID USER CPU% RSS COMMAND`. Sorted by CPU%. No selection cursor yet.
-- `format.rs`: bytes (`KiB`/`MiB`/`GiB`), basic placeholder for age.
-- CLI scaffolding via clap: `--interval`, `--version`, `--help`.
-- Startup error handling: if `/proc` unreadable, print error to stderr and exit 1 before entering raw mode.
-
-**Tests (unit only):**
-- `format` byte/age formatters covering boundaries (999B, 1024B, 1MiB-1, etc.).
-- A `MockProcessSource` that returns canned snapshots, used to verify sampler delta calc and PID-reuse handling.
-- `LinuxProcessSource` smoke test guarded behind `cfg(target_os = "linux")` reading actual `/proc` and asserting non-empty.
-
-**Done when:** `cargo run` shows a live-updating load-sorted list of processes that doesn't flicker; `Ctrl-C` exits cleanly; CPU% shows `—` on first frame and real values from the second; `--interval 2` works.
-
----
-
 ### Phase 2 — Search + load view interactivity
 
 Add the search box, search DSL, fuzzy match, load-view selection, sort cycling, and pause.
