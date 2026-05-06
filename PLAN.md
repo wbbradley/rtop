@@ -162,26 +162,6 @@ Threads, renice, kill-tree, multi-select, `cwd:` filter, search OR/negation, man
 
 ## Next Up
 
-### Phase 5 — Signal modal
-
-Add interactive process control: `K` opens a modal to send signals, with safeguards.
-
-**Deliverables:**
-- `ui/signal_modal.rs`: centered, bordered, shows target as `PID 1234  command line clipped to width` plus a vertical list of signals: `TERM` (default highlighted), `KILL`, `HUP`, `INT`, `USR1`, `USR2`, `STOP`, `CONT`. `j`/`k` to pick, `Enter` to send, `Esc` to cancel.
-- Target precedence: focused pane's cursor (load view selection if focus is search).
-- `K` from search-box / load-view / tree opens the modal.
-- Signal sending via `nix::sys::signal::kill(Pid, signal)`. On `EPERM` or `ESRCH`, set status-line error flash (e.g. `EPERM: signal SIGTERM to PID 1234 denied`).
-- Confirmation gate: if target PID is `1` or `std::process::id()` (self), pressing Enter requires a second `y` keypress (modal title changes to `confirm? (y/N)`).
-- Modal captures all keystrokes while open; sampling continues underneath.
-
-**Tests (unit only):**
-- Target-precedence helper given a focus + cursor combination.
-- "Needs confirm" predicate: PID 1, self-PID, otherwise false.
-
-**Done when:** `K` on a process you own sends the chosen signal; on a foreign process, the status line flashes a permission error; PID 1 demands confirmation; `Esc` from the modal returns to where focus was.
-
----
-
 ### Phase 6 — macOS backend
 
 Implement `MacOsProcessSource` so rtop runs on macOS.

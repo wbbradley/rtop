@@ -12,6 +12,7 @@ use crate::{
 pub mod help_modal;
 pub mod load_view;
 pub mod search_box;
+pub mod signal_modal;
 pub mod status_line;
 pub mod tree_view;
 
@@ -51,6 +52,9 @@ pub fn draw(frame: &mut Frame, app: &App) {
 
     if app.help_open {
         help_modal::render(frame, area, app);
+    }
+    if app.signal_modal.is_some() {
+        signal_modal::render(frame, area, app);
     }
 }
 

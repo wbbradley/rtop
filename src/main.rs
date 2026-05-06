@@ -10,6 +10,7 @@ mod format;
 mod process;
 mod sampler;
 mod search;
+mod signal;
 mod source;
 mod tree;
 mod ui;

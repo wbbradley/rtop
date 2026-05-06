@@ -8,6 +8,13 @@ use crate::{
     tree::{TreeNode, build_parent_to_children, build_pid_to_idx, build_visible},
 };
 
+pub struct SignalModal {
+    pub target_pid: i32,
+    pub target_label: String,
+    pub cursor: usize,
+    pub awaiting_confirm: bool,
+}
+
 pub struct App {
     pub latest: Option<Arc<Snapshot>>,
     pub quit: bool,
@@ -37,6 +44,7 @@ pub struct App {
     pub tree_cursor_id: Option<ProcessId>,
 
     pub help_open: bool,
+    pub signal_modal: Option<SignalModal>,
     pub flash: Option<(String, Instant)>,
 }
 
@@ -46,6 +54,29 @@ pub fn hint_for(focus: Focus) -> &'static str {
         Focus::Load => "j/k move | s sort | space pause | Enter drill | K signal | ?→help",
         Focus::Tree => "j/k move | Enter drill | Tab→search | ?→help",
     }
+}
+
+/// Returns true when sending a signal to this pid demands confirmation:
+/// pid == 1 (init) or pid == self_pid (suicide).
+pub fn needs_confirm(pid: i32, self_pid: i32) -> bool {
+    pid == 1 || pid == self_pid
+}
+
+/// Target precedence: tree-focus uses tree cursor; otherwise load cursor.
+/// Returns (pid, label) where label is "PID <pid>  <cmdline-or-comm>".
+pub fn signal_target(app: &App) -> Option<(i32, String)> {
+    let snap = app.latest.as_deref()?;
+    let proc_idx = match app.focus {
+        Focus::Tree => app.tree_visible.get(app.tree_cursor)?.proc_idx,
+        Focus::Search | Focus::Load => *app.filtered_indices.get(app.load_cursor)?,
+    };
+    let p = snap.processes.get(proc_idx)?;
+    let cmd = if p.cmdline.is_empty() {
+        format!("[{}]", p.name)
+    } else {
+        p.cmdline.join(" ")
+    };
+    Some((p.id.pid, format!("PID {}  {}", p.id.pid, cmd)))
 }
 
 pub fn flash_active(flash: &Option<(String, Instant)>, now: Instant) -> Option<&str> {
@@ -78,11 +109,11 @@ impl App {
             tree_cache_key: None,
             tree_cursor_id: None,
             help_open: false,
+            signal_modal: None,
             flash: None,
         }
     }
 
-    #[allow(dead_code)] // wired up by Phase 5 signal modal
     pub fn set_flash(&mut self, msg: impl Into<String>) {
         self.flash = Some((msg.into(), Instant::now()));
     }
@@ -408,5 +439,83 @@ mod tests {
     fn flash_active_none_when_unset() {
         let flash: Option<(String, Instant)> = None;
         assert_eq!(flash_active(&flash, Instant::now()), None);
+    }
+
+    #[test]
+    fn needs_confirm_pid_1_true() {
+        assert!(needs_confirm(1, 9999));
+    }
+
+    #[test]
+    fn needs_confirm_self_true() {
+        assert!(needs_confirm(42, 42));
+    }
+
+    #[test]
+    fn needs_confirm_other_false() {
+        assert!(!needs_confirm(123, 9999));
+    }
+
+    fn pid_at_load_cursor(app: &App) -> i32 {
+        let s = app.latest.as_deref().unwrap();
+        s.processes[app.filtered_indices[app.load_cursor]].id.pid
+    }
+
+    #[test]
+    fn signal_target_uses_load_cursor_when_focus_search() {
+        let s = snap();
+        let mut app = App::new(String::new());
+        app.latest = Some(s.clone());
+        app.refilter();
+        app.load_cursor = 0;
+        app.focus = Focus::Search;
+        let expected_pid = pid_at_load_cursor(&app);
+        let (pid, label) = signal_target(&app).unwrap();
+        assert_eq!(pid, expected_pid);
+        assert!(label.starts_with(&format!("PID {expected_pid}")));
+    }
+
+    #[test]
+    fn signal_target_uses_load_cursor_when_focus_load() {
+        let s = snap();
+        let mut app = App::new(String::new());
+        app.latest = Some(s.clone());
+        app.refilter();
+        app.load_cursor = 1;
+        app.focus = Focus::Load;
+        let expected_pid = pid_at_load_cursor(&app);
+        let (pid, _) = signal_target(&app).unwrap();
+        assert_eq!(pid, expected_pid);
+    }
+
+    #[test]
+    fn signal_target_uses_tree_cursor_when_focus_tree() {
+        let s = snap();
+        let mut app = App::new(String::new());
+        app.latest = Some(s.clone());
+        app.refilter();
+        let pid1_pos = app
+            .filtered_indices
+            .iter()
+            .position(|&i| s.processes[i].id.pid == 1)
+            .unwrap();
+        app.load_cursor = pid1_pos;
+        app.ensure_tree_built();
+        // Move tree cursor to pid 4 explicitly.
+        let pid4_pos = app
+            .tree_visible
+            .iter()
+            .position(|n| s.processes[n.proc_idx].id.pid == 4)
+            .unwrap();
+        app.tree_cursor = pid4_pos;
+        app.focus = Focus::Tree;
+        let (pid, _) = signal_target(&app).unwrap();
+        assert_eq!(pid, 4);
+    }
+
+    #[test]
+    fn signal_target_none_without_snapshot() {
+        let app = App::new(String::new());
+        assert!(signal_target(&app).is_none());
     }
 }

@@ -73,3 +73,16 @@ Added the UX scaffolding around the three working panes — persistent status li
 - `src/ui/load_view.rs`: when `filtered_indices` is empty, renders a dim+italic `no matches` centered inside the bordered load pane and returns before laying out the table.
 - 5 new unit tests (49 total): `focus_label_distinct`, `hint_for_each_focus`, `flash_active_returns_some_within_window`, `flash_active_returns_none_after_window`, `flash_active_none_when_unset`.
 - `chk` clean; `cargo nextest run` green (49 passed).
+
+## Phase 5 — Signal modal
+
+Wired up `K`-triggered signal sending against the focused pane's cursor:
+
+- Added `nix` (0.31.2) via `cargo add` with `--features signal,process` for `Signal`, `kill`, `Pid`, and `Errno`.
+- `src/consts.rs`: `SIGNAL_MODAL_WIDTH = 44`, `SIGNAL_MODAL_HEIGHT = 14`.
+- `src/signal.rs` (new): `SignalChoice { signal, label }` and `SIGNAL_CHOICES` — the canonical TERM / KILL / HUP / INT / USR1 / USR2 / STOP / CONT catalog driving both modal rendering and dispatch.
+- `src/app/state.rs`: new `SignalModal { target_pid, target_label, cursor, awaiting_confirm }` colocated with `App`. `App` carries `signal_modal: Option<SignalModal>`. Free helpers `needs_confirm(pid, self_pid)` (true iff `pid == 1 || pid == self_pid`) and `signal_target(&App)` (resolves focused-pane cursor → `(pid, "PID <pid>  <cmdline-or-comm>")`, with `[<comm>]` fallback for empty cmdline). Dropped `#[allow(dead_code)]` on `set_flash`.
+- `src/app.rs`: `handle_key` short-circuits to `handle_signal_modal_key` whenever the modal is open (after the help-modal short-circuit). Each focus handler grew a `Char('K')` arm calling `open_signal_modal`. Modal handler implements `j`/`k`/`Down`/`Up` to move cursor (saturating, no wrap), `Esc` to cancel, `Enter` to send (or flip into `awaiting_confirm` if `needs_confirm`); confirm state takes only `y`/`Y` (sends) or `Esc` (closes), any other key flips back to selection. `send_signal` calls `nix::sys::signal::kill(Pid::from_raw(pid), Some(sig))` and flashes `EPERM: …`, `ESRCH: …`, or a generic message on failure; success is silent.
+- `src/ui/signal_modal.rs` (new): centered, bordered, ` send signal ` title (or ` confirm? (y/N) ` while `awaiting_confirm`); first row is the target label clipped to inner width; signal rows render `SIG<NAME>` with the cursored row in reverse video and `TERM` bold cyan when not selected; final row is dim hint `j/k pick · Enter send · Esc cancel`. `ui::draw` renders the signal modal AFTER the help modal so it sits on top if both somehow open.
+- 7 new unit tests (56 total): `needs_confirm_pid_1_true`, `needs_confirm_self_true`, `needs_confirm_other_false`, plus `signal_target` cases for Search/Load/Tree focus + a no-snapshot None case. Reuses the existing 4-process `snap()` fixture.
+- `chk` clean (clippy folded the cursor-bound check into a match guard); `cargo nextest run` green (56 passed).

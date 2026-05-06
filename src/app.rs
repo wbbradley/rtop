@@ -11,7 +11,7 @@ pub mod event;
 pub mod state;
 
 use event::Focus;
-use state::App;
+use state::{App, SignalModal};
 
 pub fn run(snapshot_rx: Receiver<Arc<Snapshot>>, initial_filter: String) -> anyhow::Result<()> {
     let mut terminal = ratatui::try_init().context("failed to initialize terminal")?;
@@ -86,6 +86,10 @@ fn handle_key(app: &mut App, k: KeyEvent) {
         }
         return;
     }
+    if app.signal_modal.is_some() {
+        handle_signal_modal_key(app, k);
+        return;
+    }
     if matches!(k.code, KeyCode::Char('?')) {
         app.help_open = true;
         return;
@@ -102,6 +106,7 @@ fn handle_search_key(app: &mut App, k: KeyEvent) {
     match k.code {
         KeyCode::Char('n') if ctrl => move_cursor(app, 1),
         KeyCode::Char('p') if ctrl => move_cursor(app, -1),
+        KeyCode::Char('K') if !ctrl => open_signal_modal(app),
         KeyCode::Char(c) if !ctrl => {
             app.query_text.push(c);
             app.refilter();
@@ -135,6 +140,7 @@ fn handle_load_key(app: &mut App, k: KeyEvent) {
     match k.code {
         KeyCode::Char('j') => move_cursor(app, 1),
         KeyCode::Char('k') => move_cursor(app, -1),
+        KeyCode::Char('K') => open_signal_modal(app),
         KeyCode::Char('g') => {
             if was_pending_g {
                 app.load_cursor = 0;
@@ -196,6 +202,7 @@ fn handle_tree_key(app: &mut App, k: KeyEvent) {
     match k.code {
         KeyCode::Char('j') => move_tree_cursor(app, 1),
         KeyCode::Char('k') => move_tree_cursor(app, -1),
+        KeyCode::Char('K') => open_signal_modal(app),
         KeyCode::Char('g') => {
             if was_pending_g {
                 app.tree_cursor = 0;
@@ -300,4 +307,71 @@ fn current_tree_cursor_pid(app: &App) -> Option<i32> {
     let snap = app.latest.as_deref()?;
     let n = app.tree_visible.get(app.tree_cursor)?;
     Some(snap.processes[n.proc_idx].id.pid)
+}
+
+fn open_signal_modal(app: &mut App) {
+    if let Some((pid, label)) = state::signal_target(app) {
+        app.signal_modal = Some(SignalModal {
+            target_pid: pid,
+            target_label: label,
+            cursor: 0,
+            awaiting_confirm: false,
+        });
+    } else {
+        app.set_flash("no process selected".to_string());
+    }
+}
+
+fn handle_signal_modal_key(app: &mut App, k: KeyEvent) {
+    let Some(modal) = app.signal_modal.as_mut() else {
+        return;
+    };
+    let n = crate::signal::SIGNAL_CHOICES.len();
+    if modal.awaiting_confirm {
+        match k.code {
+            KeyCode::Char('y') | KeyCode::Char('Y') => {
+                let pid = modal.target_pid;
+                let sig = crate::signal::SIGNAL_CHOICES[modal.cursor].signal;
+                let label = crate::signal::SIGNAL_CHOICES[modal.cursor].label;
+                app.signal_modal = None;
+                send_signal(app, pid, sig, label);
+            }
+            KeyCode::Esc => app.signal_modal = None,
+            _ => modal.awaiting_confirm = false,
+        }
+        return;
+    }
+    match k.code {
+        KeyCode::Char('j') | KeyCode::Down
+            if modal.cursor + 1 < n => {
+                modal.cursor += 1;
+            }
+        KeyCode::Char('k') | KeyCode::Up => {
+            modal.cursor = modal.cursor.saturating_sub(1);
+        }
+        KeyCode::Esc => app.signal_modal = None,
+        KeyCode::Enter => {
+            let pid = modal.target_pid;
+            let self_pid = std::process::id() as i32;
+            if state::needs_confirm(pid, self_pid) {
+                modal.awaiting_confirm = true;
+            } else {
+                let sig = crate::signal::SIGNAL_CHOICES[modal.cursor].signal;
+                let label = crate::signal::SIGNAL_CHOICES[modal.cursor].label;
+                app.signal_modal = None;
+                send_signal(app, pid, sig, label);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn send_signal(app: &mut App, pid: i32, sig: nix::sys::signal::Signal, label: &str) {
+    use nix::{errno::Errno, sys::signal::kill, unistd::Pid};
+    match kill(Pid::from_raw(pid), Some(sig)) {
+        Ok(()) => {}
+        Err(Errno::EPERM) => app.set_flash(format!("EPERM: signal SIG{label} to PID {pid} denied")),
+        Err(Errno::ESRCH) => app.set_flash(format!("ESRCH: PID {pid} no longer exists")),
+        Err(e) => app.set_flash(format!("kill PID {pid} SIG{label}: {e}")),
+    }
 }
