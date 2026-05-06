@@ -1,8 +1,8 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Instant};
 
 use crate::{
     app::event::{Focus, SortKey},
-    consts::SCROLLOFF,
+    consts::{ERROR_FLASH_DURATION, SCROLLOFF},
     process::{ProcessId, Snapshot},
     search::{Query, filter, parse},
     tree::{TreeNode, build_parent_to_children, build_pid_to_idx, build_visible},
@@ -35,6 +35,26 @@ pub struct App {
     /// ProcessId currently under the tree cursor — used to re-anchor the cursor
     /// across snapshot rebuilds when the load-view selection didn't change.
     pub tree_cursor_id: Option<ProcessId>,
+
+    pub help_open: bool,
+    pub flash: Option<(String, Instant)>,
+}
+
+pub fn hint_for(focus: Focus) -> &'static str {
+    match focus {
+        Focus::Search => "type to filter | Enter→load | Tab→cycle | ?→help",
+        Focus::Load => "j/k move | s sort | space pause | Enter drill | K signal | ?→help",
+        Focus::Tree => "j/k move | Enter drill | Tab→search | ?→help",
+    }
+}
+
+pub fn flash_active(flash: &Option<(String, Instant)>, now: Instant) -> Option<&str> {
+    let (msg, t) = flash.as_ref()?;
+    if now.duration_since(*t) < ERROR_FLASH_DURATION {
+        Some(msg.as_str())
+    } else {
+        None
+    }
 }
 
 impl App {
@@ -57,7 +77,14 @@ impl App {
             tree_offset: 0,
             tree_cache_key: None,
             tree_cursor_id: None,
+            help_open: false,
+            flash: None,
         }
+    }
+
+    #[allow(dead_code)] // wired up by Phase 5 signal modal
+    pub fn set_flash(&mut self, msg: impl Into<String>) {
+        self.flash = Some((msg.into(), Instant::now()));
     }
 
     pub fn refilter(&mut self) {
@@ -217,7 +244,10 @@ mod tests {
     };
 
     use super::*;
-    use crate::process::{Process, ProcessId, Snapshot, SystemStats};
+    use crate::{
+        consts::ERROR_FLASH_DURATION,
+        process::{Process, ProcessId, Snapshot, SystemStats},
+    };
 
     fn mk_proc(pid: i32, ppid: i32) -> Process {
         Process {
@@ -343,5 +373,40 @@ mod tests {
             .id
             .pid;
         assert_eq!(cursor_pid, 3);
+    }
+
+    #[test]
+    fn hint_for_each_focus() {
+        let s = hint_for(Focus::Search);
+        let l = hint_for(Focus::Load);
+        let t = hint_for(Focus::Tree);
+        assert!(!s.is_empty());
+        assert!(!l.is_empty());
+        assert!(!t.is_empty());
+        assert_ne!(s, l);
+        assert_ne!(l, t);
+        assert_ne!(s, t);
+    }
+
+    #[test]
+    fn flash_active_returns_some_within_window() {
+        let now = Instant::now();
+        let flash = Some(("err".to_string(), now));
+        let later = now + Duration::from_secs(1);
+        assert_eq!(flash_active(&flash, later), Some("err"));
+    }
+
+    #[test]
+    fn flash_active_returns_none_after_window() {
+        let now = Instant::now();
+        let flash = Some(("err".to_string(), now));
+        let later = now + ERROR_FLASH_DURATION + Duration::from_millis(1);
+        assert_eq!(flash_active(&flash, later), None);
+    }
+
+    #[test]
+    fn flash_active_none_when_unset() {
+        let flash: Option<(String, Instant)> = None;
+        assert_eq!(flash_active(&flash, Instant::now()), None);
     }
 }

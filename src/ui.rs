@@ -1,20 +1,27 @@
 use ratatui::{
     Frame,
-    layout::{Alignment, Constraint, Direction, Layout},
+    layout::{Alignment, Constraint, Direction, Layout, Rect},
     widgets::{Block, Paragraph},
 };
 
 use crate::{
     app::state::App,
-    consts::{LOAD_VIEW_HEIGHT, SEARCH_BOX_HEIGHT},
+    consts::{LOAD_VIEW_HEIGHT, MIN_COLS, MIN_ROWS, SEARCH_BOX_HEIGHT, STATUS_LINE_HEIGHT},
 };
 
+pub mod help_modal;
 pub mod load_view;
 pub mod search_box;
+pub mod status_line;
 pub mod tree_view;
 
 pub fn draw(frame: &mut Frame, app: &App) {
     let area = frame.area();
+
+    if area.width < MIN_COLS || area.height < MIN_ROWS {
+        render_too_small(frame, area);
+        return;
+    }
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -22,6 +29,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
             Constraint::Length(SEARCH_BOX_HEIGHT),
             Constraint::Length(LOAD_VIEW_HEIGHT),
             Constraint::Min(0),
+            Constraint::Length(STATUS_LINE_HEIGHT),
         ])
         .split(area);
 
@@ -39,4 +47,29 @@ pub fn draw(frame: &mut Frame, app: &App) {
     }
 
     tree_view::render(frame, chunks[2], app);
+    status_line::render(frame, chunks[3], app);
+
+    if app.help_open {
+        help_modal::render(frame, area, app);
+    }
+}
+
+fn render_too_small(frame: &mut Frame, area: Rect) {
+    let msg = format!(
+        "terminal too small ({}×{} < {}×{})",
+        area.width, area.height, MIN_COLS, MIN_ROWS
+    );
+    let row = if area.height == 0 {
+        return;
+    } else {
+        area.height / 2
+    };
+    let strip = Rect {
+        x: area.x,
+        y: area.y + row,
+        width: area.width,
+        height: 1,
+    };
+    let p = Paragraph::new(msg).alignment(Alignment::Center);
+    frame.render_widget(p, strip);
 }

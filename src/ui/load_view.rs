@@ -1,9 +1,9 @@
 use ratatui::{
     Frame,
-    layout::{Constraint, Rect},
+    layout::{Alignment, Constraint, Rect},
     style::{Color, Modifier, Style},
     text::Span,
-    widgets::{Block, Cell, Row, Table},
+    widgets::{Block, Cell, Paragraph, Row, Table},
 };
 
 use crate::{
@@ -21,6 +21,20 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     let Some(snap) = app.latest.as_deref() else {
         return;
     };
+
+    if app.filtered_indices.is_empty() {
+        let style = Style::default().add_modifier(Modifier::DIM | Modifier::ITALIC);
+        let p = Paragraph::new(Span::styled("no matches", style)).alignment(Alignment::Center);
+        let row_y = inner.y + inner.height / 2;
+        let strip = Rect {
+            x: inner.x,
+            y: row_y,
+            width: inner.width,
+            height: 1,
+        };
+        frame.render_widget(p, strip);
+        return;
+    }
 
     let max_rows = inner.height.saturating_sub(1) as usize;
     let visible_rows = max_rows.min(LOAD_VIEW_VISIBLE_ROWS);

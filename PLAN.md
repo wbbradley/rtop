@@ -162,26 +162,6 @@ Threads, renice, kill-tree, multi-select, `cwd:` filter, search OR/negation, man
 
 ## Next Up
 
-### Phase 4 — Status line, help modal, empty/error states
-
-Polish the UX scaffolding around the three working panes.
-
-**Deliverables:**
-- `ui/status_line.rs`: layout `[focus] [N/M procs] [sort: <key>] [paused?]   [load: x x x  mem: x/y GiB]   [error|hint]`. Hint text is adaptive per focused pane (see binding table). Error/info messages flash for `ERROR_FLASH_DURATION` then revert to hint.
-- Status line takes 1 row at the bottom; load view height adjusted accordingly.
-- `ui/help_modal.rs`: centered, bordered, ~60×20. Three sections (search / load / tree), tabular layout. `?` toggles open; `Esc` closes. Help modal captures all keystrokes while open.
-- Empty-state for load view: when filter yields zero processes, render dim italic `no matches` centered in the load view's bordered area.
-- Terminal-too-small: if `terminal.size() < (MIN_COLS, MIN_ROWS)`, render a single centered message, skip pane drawing.
-- Error infrastructure: `app::state` carries an `Option<(String, Instant)>` for the current flash; UI checks expiry on each render.
-
-**Tests (unit only):**
-- Hint text helper: returns the right hint for a given focus enum.
-- Error flash timing: stale flashes clear after duration.
-
-**Done when:** `?` shows the bindings; resizing the terminal small shows the message and recovers when grown; an empty filter shows `no matches`; sort/focus changes are reflected in the status line.
-
----
-
 ### Phase 5 — Signal modal
 
 Add interactive process control: `K` opens a modal to send signals, with safeguards.

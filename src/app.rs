@@ -79,6 +79,17 @@ fn handle_key(app: &mut App, k: KeyEvent) {
         app.quit = true;
         return;
     }
+    if app.help_open {
+        match k.code {
+            KeyCode::Esc | KeyCode::Char('?') => app.help_open = false,
+            _ => {}
+        }
+        return;
+    }
+    if matches!(k.code, KeyCode::Char('?')) {
+        app.help_open = true;
+        return;
+    }
     match app.focus {
         Focus::Search => handle_search_key(app, k),
         Focus::Load => handle_load_key(app, k),

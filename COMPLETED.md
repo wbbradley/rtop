@@ -58,3 +58,18 @@ Added the third pane below the load view: spine of ancestors + DFS of the load-v
 - `src/ui/tree_view.rs`: renders a `Paragraph<Vec<Line>>` per visible row in the format `{pid:>7} {cpu:>5} {rss:>8}  {gutter}{command}` plus an inline cyan `[user]` when the node's user differs from its parent's. Gutter glyphs are `│  ` / `   ` per ancestor column followed by `├─` / `└─` connector. Selected row uses reverse video. Diverged from PLAN.md's literal column ordering — fixed-width PID/CPU%/RSS come before the variable-width gutter so numeric columns stay aligned.
 - 7 new unit tests (44 total): four `build_visible` cases (root / mid / leaf / missing selection), `ancestors_last_flags_branch` exercising the `[true, false]` flag sequence on a five-process fixture, plus two `App::ensure_tree_built` tests for cursor reset on selection change and cursor preservation across snapshot ticks.
 - `chk` clean; `cargo nextest run` green (44 passed).
+
+## Phase 4 — Status line, help modal, empty/error states
+
+Added the UX scaffolding around the three working panes — persistent status line, `?`-triggered help modal, empty filter state, terminal-too-small fallback, and the flash infrastructure that Phase 5 will hook into:
+
+- `src/consts.rs`: added `STATUS_LINE_HEIGHT: u16 = 1`, `HELP_MODAL_WIDTH: u16 = 60`, `HELP_MODAL_HEIGHT: u16 = 20`.
+- `src/app/event.rs`: `Focus::label()` returning `"search"` / `"load"` / `"tree"`. Dropped `#[allow(dead_code)]` on `SortKey::label` (now live in the status line). Added `focus_label_distinct` test.
+- `src/app/state.rs`: `App` carries `help_open: bool` and `flash: Option<(String, Instant)>`. Free helpers `hint_for(focus)` (adaptive per-pane hint string) and `flash_active(&flash, now)` (returns `Some(s)` while inside `ERROR_FLASH_DURATION`, else `None`). `App::set_flash(msg)` records the current `Instant`; `#[allow(dead_code)]` until Phase 5 wires it.
+- `src/app.rs`: `handle_key` short-circuits modal handling and the `?` toggle BEFORE focus dispatch, so the search-focus printable-char branch never sees `?`. While `help_open`, only `Esc` and `?` are honored; everything else is swallowed.
+- `src/ui.rs`: re-architected `draw` — checks `frame.area()` against `MIN_COLS`/`MIN_ROWS` first and renders a single centered `terminal too small (W×H < MIN×MIN)` message when below; otherwise vertical split is `SEARCH_BOX_HEIGHT` / `LOAD_VIEW_HEIGHT` / `Min(0)` / `STATUS_LINE_HEIGHT`. Help modal renders last over the full area.
+- `src/ui/status_line.rs`: two-pass paragraph rendering — left-aligned focus + counts + sort + paused + load/mem groups; right-aligned hint (dim) or current flash (red bold). Pre-snapshot fallback shows `—/— procs` and `…sampling`. Bytes via `format::bytes`.
+- `src/ui/help_modal.rs`: centered `HELP_MODAL_WIDTH × HELP_MODAL_HEIGHT` rect cleared with `Clear`, bordered block titled ` help `, tabular `key → action` rows under bold section headers (`[ search ]`, `[ load ]`, `[ tree ]`, `[ any ]`). Private `centered_rect` helper.
+- `src/ui/load_view.rs`: when `filtered_indices` is empty, renders a dim+italic `no matches` centered inside the bordered load pane and returns before laying out the table.
+- 5 new unit tests (49 total): `focus_label_distinct`, `hint_for_each_focus`, `flash_active_returns_some_within_window`, `flash_active_returns_none_after_window`, `flash_active_none_when_unset`.
+- `chk` clean; `cargo nextest run` green (49 passed).

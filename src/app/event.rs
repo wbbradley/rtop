@@ -5,6 +5,16 @@ pub enum Focus {
     Tree,
 }
 
+impl Focus {
+    pub fn label(self) -> &'static str {
+        match self {
+            Focus::Search => "search",
+            Focus::Load => "load",
+            Focus::Tree => "tree",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SortKey {
     Cpu,
@@ -23,7 +33,6 @@ impl SortKey {
         }
     }
 
-    #[allow(dead_code)] // used in Phase 4 status line
     pub fn label(self) -> &'static str {
         match self {
             SortKey::Cpu => "cpu",
@@ -52,5 +61,20 @@ mod tests {
         assert_eq!(SortKey::Rss.label(), "rss");
         assert_eq!(SortKey::TimePlus.label(), "time+");
         assert_eq!(SortKey::Age.label(), "age");
+    }
+
+    #[test]
+    fn focus_label_distinct() {
+        let labels = [
+            Focus::Search.label(),
+            Focus::Load.label(),
+            Focus::Tree.label(),
+        ];
+        for l in labels {
+            assert!(!l.is_empty());
+        }
+        assert_ne!(labels[0], labels[1]);
+        assert_ne!(labels[1], labels[2]);
+        assert_ne!(labels[0], labels[2]);
     }
 }
