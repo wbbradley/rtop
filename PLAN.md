@@ -1,6 +1,6 @@
 # rtop — Implementation Plan
 
-A TUI process monitor in the spirit of `top`/`htop`, with vim-style navigation, a fuzzy search box driving a load-sorted list, and a context-sensitive process tree below.
+A TUI process monitor in the spirit of `top`/`htop`, with vim-style navigation, a substring search box driving a load-sorted list, and a context-sensitive process tree below.
 
 ## Architecture Reference
 
@@ -20,7 +20,7 @@ Search box state is canonical. Load view filters/sorts off it. Tree shows spine 
 ### Search DSL
 
 - Prefixed terms (case-insensitive substring): `pid:`, `ppid:`, `user:`, `name:`, `cmd:`, `state:`.
-- Bare terms: nucleo fuzzy match against `name + " " + cmdline + " " + user`.
+- Bare terms: case-insensitive substring match against `name + " " + cmdline + " " + user`.
 - Space-separated terms = AND. No OR/negation in v1.
 - `pid:X` is special: exact equality, auto-scrolls + highlights the row in load view, does not filter the rest out. (All other prefixes filter normally.)
 
@@ -152,7 +152,7 @@ No magic numbers anywhere. All tunables live in `consts.rs`:
 
 ### Crates
 
-`ratatui`, `crossterm`, `procfs` (Linux), `libproc` + `libc` (macOS, Phase 6), `crossbeam-channel`, `nucleo`, `clap` (derive), `nix` for `kill(2)`. All added via `cargo add`.
+`ratatui`, `crossterm`, `procfs` (Linux), `libproc` + `libc` (macOS, Phase 6), `crossbeam-channel`, `clap` (derive), `nix` for `kill(2)`. All added via `cargo add`.
 
 ### Out of v1 scope
 

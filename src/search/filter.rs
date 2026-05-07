@@ -1,7 +1,5 @@
 use std::cmp::Ordering;
 
-use nucleo_matcher::{Config, Matcher, Utf32Str};
-
 use crate::{
     app::event::SortKey,
     process::{Process, Snapshot},
@@ -12,14 +10,10 @@ pub fn filter(query: &Query, snap: &Snapshot, sort: SortKey) -> Vec<usize> {
     let mut indices: Vec<usize> = (0..snap.processes.len()).collect();
 
     if !query.terms.is_empty() {
-        let mut matcher = Matcher::new(Config::DEFAULT);
-        let mut hay_buf: Vec<char> = Vec::new();
-        let mut needle_buf: Vec<char> = Vec::new();
-
         indices.retain(|&i| {
             let p = &snap.processes[i];
             for term in &query.terms {
-                if !term_matches(p, term, &mut matcher, &mut hay_buf, &mut needle_buf) {
+                if !term_matches(p, term) {
                     return false;
                 }
             }
@@ -31,13 +25,7 @@ pub fn filter(query: &Query, snap: &Snapshot, sort: SortKey) -> Vec<usize> {
     indices
 }
 
-fn term_matches(
-    p: &Process,
-    term: &Term,
-    matcher: &mut Matcher,
-    hay_buf: &mut Vec<char>,
-    needle_buf: &mut Vec<char>,
-) -> bool {
+fn term_matches(p: &Process, term: &Term) -> bool {
     match term {
         Term::Prefixed { field, value } => match field {
             // pid: does NOT filter — it only sets auto_select_pid in the parsed query.
@@ -52,12 +40,8 @@ fn term_matches(
             Field::State => p.state.eq_ignore_ascii_case(&first_char(value)),
         },
         Term::Bare(s) => {
-            let haystack_str = format!("{} {} {}", p.name, cmdline_joined(p), p.user);
-            hay_buf.clear();
-            needle_buf.clear();
-            let haystack = Utf32Str::new(&haystack_str, hay_buf);
-            let needle = Utf32Str::new(s, needle_buf);
-            matcher.fuzzy_match(haystack, needle).is_some()
+            let haystack = format!("{} {} {}", p.name, cmdline_joined(p), p.user);
+            contains_ci(&haystack, s)
         }
     }
 }
@@ -204,11 +188,38 @@ mod tests {
     }
 
     #[test]
-    fn bare_fuzzy_matches_cmdline() {
+    fn bare_substring_matches_cmdline() {
         let snap = fixture();
         let q = crate::search::parse("firef");
         let r = filter(&q, &snap, SortKey::Cpu);
         assert_eq!(pids(&snap, &r), vec![202]);
+
+        let q = crate::search::parse("firefox");
+        let r = filter(&q, &snap, SortKey::Cpu);
+        assert_eq!(pids(&snap, &r), vec![202]);
+
+        let q = crate::search::parse("frfx");
+        let r = filter(&q, &snap, SortKey::Cpu);
+        assert!(r.is_empty());
+    }
+
+    #[test]
+    fn bare_term_is_case_insensitive() {
+        let snap = fixture();
+        let q = crate::search::parse("FIREFOX");
+        let r = filter(&q, &snap, SortKey::Cpu);
+        assert_eq!(pids(&snap, &r), vec![202]);
+    }
+
+    #[test]
+    fn multi_bare_terms_and() {
+        let snap = fixture();
+        let q = crate::search::parse("bash wbbradley");
+        let r = filter(&q, &snap, SortKey::Cpu);
+        let result_pids = pids(&snap, &r);
+        assert_eq!(result_pids, vec![101]);
+        assert!(!result_pids.contains(&1));
+        assert!(!result_pids.contains(&42));
     }
 
     #[test]

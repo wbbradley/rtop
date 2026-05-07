@@ -342,10 +342,9 @@ fn handle_signal_modal_key(app: &mut App, k: KeyEvent) {
         return;
     }
     match k.code {
-        KeyCode::Char('j') | KeyCode::Down
-            if modal.cursor + 1 < n => {
-                modal.cursor += 1;
-            }
+        KeyCode::Char('j') | KeyCode::Down if modal.cursor + 1 < n => {
+            modal.cursor += 1;
+        }
         KeyCode::Char('k') | KeyCode::Up => {
             modal.cursor = modal.cursor.saturating_sub(1);
         }

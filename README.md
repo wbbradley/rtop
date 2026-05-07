@@ -1,6 +1,6 @@
 # rtop
 
-A TUI process monitor in the spirit of `top`/`htop`, with vim-style navigation, a fuzzy search box driving a load-sorted list, and a context-sensitive process tree below.
+A TUI process monitor in the spirit of `top`/`htop`, with vim-style navigation, a substring search box driving a load-sorted list, and a context-sensitive process tree below.
 
 ## Status
 

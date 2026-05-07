@@ -2,7 +2,7 @@
 name = "rtop"
 version = "0.1.0"
 edition = "2024"
-description = "A TUI process monitor with vim-style navigation, fuzzy search, and a process tree view."
+description = "A TUI process monitor with vim-style navigation, substring search, and a process tree view."
 repository = "https://github.com/wbbradley/rtop"
 license = "MIT"
 readme = "README.md"
@@ -15,7 +15,6 @@ clap = { version = "4.6.1", features = ["derive"] }
 crossbeam-channel = "0.5.15"
 crossterm = "0.29.0"
 nix = { version = "0.31.2", features = ["signal", "process"] }
-nucleo-matcher = "0.3.1"
 procfs = "0.18.0"
 ratatui = "0.30.0"
 uzers = "0.12.2"

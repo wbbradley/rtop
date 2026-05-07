@@ -32,7 +32,7 @@ Stood up the IR, sampler, and a minimal ratatui app that displays a load-sorted 
 
 Wired up the search box, search DSL, fuzzy filter, load-view interactivity, sort cycling, and pause:
 
-- Added `nucleo-matcher` (0.3.1) via `cargo add` for synchronous per-keystroke fuzzy match. Documented refinement from the original `nucleo` crate listed in PLAN.md (we want `Matcher::fuzzy_match`, not the injection/orchestrator surface).
+- Added `nucleo-matcher` (0.3.1) via `cargo add` for synchronous per-keystroke fuzzy match. (superseded by Phase 5.5) Documented refinement from the original `nucleo` crate listed in PLAN.md (we want `Matcher::fuzzy_match`, not the injection/orchestrator surface).
 - `src/consts.rs`: added `SEARCH_BOX_HEIGHT: u16 = 3` and `LOAD_VIEW_HEIGHT: u16 = 13`.
 - `src/format.rs`: added `time_plus(Duration)` (`1h23m` / `12m45s` / `45s`), reused for both TIME+ and AGE this phase. Phase 7 will refine.
 - `src/search.rs` + `src/search/parser.rs` + `src/search/filter.rs`: DSL (`pid:`, `ppid:`, `user:`, `name:`, `cmd:`, `state:` + bare fuzzy) parsed into `Query { terms, auto_select_pid }`, AND across terms; bare terms fuzzy-match against `name + " " + cmdline + " " + user`. `pid:` does not filter — it sets `auto_select_pid` and the load view scrolls/highlights to it. Sort dispatched on `SortKey` (CPU desc with None-last, RSS desc, TIME+ desc on `cpu_time_total`, AGE desc on `age`).
@@ -86,3 +86,14 @@ Wired up `K`-triggered signal sending against the focused pane's cursor:
 - `src/ui/signal_modal.rs` (new): centered, bordered, ` send signal ` title (or ` confirm? (y/N) ` while `awaiting_confirm`); first row is the target label clipped to inner width; signal rows render `SIG<NAME>` with the cursored row in reverse video and `TERM` bold cyan when not selected; final row is dim hint `j/k pick · Enter send · Esc cancel`. `ui::draw` renders the signal modal AFTER the help modal so it sits on top if both somehow open.
 - 7 new unit tests (56 total): `needs_confirm_pid_1_true`, `needs_confirm_self_true`, `needs_confirm_other_false`, plus `signal_target` cases for Search/Load/Tree focus + a no-snapshot None case. Reuses the existing 4-process `snap()` fixture.
 - `chk` clean (clippy folded the cursor-bound check into a match guard); `cargo nextest run` green (56 passed).
+
+## Phase 5.5 — Substring search (drop fuzzy)
+
+Replaced the bare-term fuzzy matcher with case-insensitive substring matching so all terms (prefixed and bare) share the same semantics; dropped the `nucleo-matcher` dependency:
+
+- `src/search/filter.rs`: removed the `Matcher`/`Utf32Str` setup, `hay_buf`/`needle_buf` scratch buffers, and the `nucleo_matcher` import. `term_matches` simplifies to `fn term_matches(p: &Process, term: &Term) -> bool`. The `Term::Bare(s)` arm now reuses the existing `contains_ci` helper against `name + " " + cmdline + " " + user`.
+- `Cargo.toml`: `cargo remove nucleo-matcher` (also drops it from `Cargo.lock`); `description` updated from "fuzzy search" to "substring search".
+- `PLAN.md`: Architecture Reference bare-terms bullet now reads "case-insensitive substring match against …"; `nucleo` removed from the Crates list; top-of-file blurb updated to "substring search box".
+- `README.md`: top-of-file blurb updated to "substring search box".
+- 3 test updates in `src/search/filter.rs`: renamed `bare_fuzzy_matches_cmdline` → `bare_substring_matches_cmdline` (kept `firef` positive case, added `firefox` positive case, added `frfx` negative case that was a fuzzy-only hit pre-5.5); added `bare_term_is_case_insensitive` (`FIREFOX` matches PID 202); added `multi_bare_terms_and` (`bash wbbradley` matches PID 101 only).
+- `chk` clean; `cargo nextest run` green (58 passed).
