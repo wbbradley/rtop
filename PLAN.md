@@ -162,24 +162,6 @@ Threads, renice, kill-tree, multi-select, `cwd:` filter, search OR/negation, man
 
 ## Next Up
 
-### Phase 6 — macOS backend
-
-Implement `MacOsProcessSource` so rtop runs on macOS.
-
-**Deliverables:**
-- `source/macos.rs`: enumerate processes via `sysctl(KERN_PROC_ALL)` (raw `kinfo_proc` array, via `libc`); for each pid, fetch cmdline via `proc_pidinfo`/`proc_pidpath` from the `libproc` crate, fetch CPU times via `proc_pid_rusage`, fetch start_time from `kinfo_proc`. Resolve UID → username via `getpwuid_r`.
-- Map results into the same `Process` IR. `is_kernel_thread = false` for all macOS processes (no equivalent of Linux's PID 2 subtree).
-- Cfg-gate `source/linux.rs` and `source/macos.rs` and the `pub use` in `source.rs`.
-- CI: enable the macOS job (drop `continue-on-error`).
-- Document macOS limitations in README (CPU% computation works the same; some kernel-only stats unavailable; signals work via `nix`).
-
-**Tests (unit only):**
-- macOS-guarded smoke test reading the live process list and asserting non-empty + that `getpid()` is present.
-
-**Done when:** `cargo run` on macOS produces the same UI behavior as Linux for the working features; CI passes both jobs.
-
----
-
 ### Phase 7 — Polish
 
 Visual and behavioral refinement to ship-quality.

@@ -15,6 +15,13 @@ clap = { version = "4.6.1", features = ["derive"] }
 crossbeam-channel = "0.5.15"
 crossterm = "0.29.0"
 nix = { version = "0.31.2", features = ["signal", "process"] }
-procfs = "0.18.0"
 ratatui = "0.30.0"
 uzers = "0.12.2"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+procfs = "0.18.0"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2.186"
+libproc = "0.14.11"
+mach2 = "0.6.0"

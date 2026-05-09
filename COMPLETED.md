@@ -87,6 +87,20 @@ Wired up `K`-triggered signal sending against the focused pane's cursor:
 - 7 new unit tests (56 total): `needs_confirm_pid_1_true`, `needs_confirm_self_true`, `needs_confirm_other_false`, plus `signal_target` cases for Search/Load/Tree focus + a no-snapshot None case. Reuses the existing 4-process `snap()` fixture.
 - `chk` clean (clippy folded the cursor-bound check into a match guard); `cargo nextest run` green (56 passed).
 
+## Phase 6 — macOS backend
+
+Stood up `MacOsProcessSource` so rtop runs on macOS with the same UI surface as Linux:
+
+- Added macOS-conditional deps via `cargo add --target 'cfg(target_os = "macos")' libc libproc mach2`. Moved the existing `procfs` dep under `[target.'cfg(target_os = "linux")'.dependencies]` so non-Linux builds skip its build script (which hard-fails on non-Linux).
+- `src/source.rs`: cfg-gated `pub mod macos` + `pub use macos::MacOsProcessSource as PlatformSource;` mirroring the Linux block.
+- `src/source/macos.rs` (new): `MacOsProcessSource` with a `pidrusage(getpid())` ctor probe (mirrors Linux's `/proc/self/stat` probe), cached `argmax` (`sysctl(CTL_KERN, KERN_ARGMAX)`), `_SC_PAGESIZE`, and a reusable scratch `args_buf`. Pivoted from the plan's `kinfo_proc` approach (libc 0.2 doesn't expose that struct on macOS) to `libproc::processes::pids_by_type(ProcFilter::All)` + per-pid `pidinfo::<BSDInfo>` for ppid/uid/state/start/comm and `pidrusage::<RUsageInfoV2>` for `ri_user_time`/`ri_system_time` (fed into `cpu_time_total`) and `ri_resident_size`. Full argv via `sysctl(KERN_PROCARGS2)` into the scratch buffer; `parse_procargs2` extracted as a pure function so it can be unit-tested without the kernel. State map: SIDL/SRUN/SSLEEP/SSTOP/SZOMB → `I`/`R`/`S`/`T`/`Z`. `start_time = secs * 1_000_000 + usecs` for stable `ProcessId` identity across PID reuse. Skip pid 0 (kernel_task surrogate). On per-pid `pidinfo`/`pidrusage` failure (sandboxed, `EPERM`), `continue` — same shape as Linux's `NotFound` skip.
+- Memory: `sysctl(CTL_HW, HW_MEMSIZE)` for total. `host_statistics64(HOST_VM_INFO64)` for VM stats; `mach2 0.6` doesn't expose `host_statistics64` so it's declared as a private extern and `HOST_VM_INFO64` is a local const. `used = (active + wired + compressed) * page_size` (Activity Monitor's "memory used" formula). Load avg via `libc::getloadavg(loads, 3)`.
+- `is_kernel_thread = false` always on macOS (no equivalent of Linux's PID 2 subtree); the renderer already handles this case.
+- `.github/workflows/ci.yml`: dropped `continue-on-error: true` from the macOS job — it must now pass.
+- README platform-support section now lists Linux + macOS as full-support.
+- 4 new unit tests (62 total): `smoke` (asserts `getpid()` is in the live snapshot), `map_state_known_values`, `parse_procargs2_basic` (hand-built buffer with `argc=2 | exec_path | padding | argv[0] | argv[1] | env`), `parse_procargs2_empty_on_short_buffer`, `parse_procargs2_zero_argc`.
+- `chk` clean on macOS (rustfmt + clippy `-D warnings`); `cargo nextest run` green (62 passed); release build succeeds.
+
 ## Phase 5.5 — Substring search (drop fuzzy)
 
 Replaced the bare-term fuzzy matcher with case-insensitive substring matching so all terms (prefixed and bare) share the same semantics; dropped the `nucleo-matcher` dependency:

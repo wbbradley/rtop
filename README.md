@@ -25,7 +25,9 @@ cargo install --path .
 
 ## Platform support
 
-Linux now; macOS planned (Phase 6).
+- Linux (full support, via `procfs`).
+- macOS (full support, via `libproc` + `sysctl`; signals via `nix::sys::signal::kill`. Some
+  kernel-only stats from `procfs` are not available on macOS, but the visible UI is identical).
 
 ## License
 
