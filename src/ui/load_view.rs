@@ -8,7 +8,7 @@ use ratatui::{
 
 use crate::{
     app::state::App,
-    consts::{LOAD_VIEW_VISIBLE_ROWS, SCROLLOFF},
+    consts::{CPU_DANGER_PCT, CPU_WARN_PCT, LOAD_VIEW_VISIBLE_ROWS, SCROLLOFF},
     format,
     process::Process,
 };
@@ -101,26 +101,49 @@ fn clamp_offset(mut offset: usize, cursor: usize, total: usize, visible: usize) 
 fn build_row(p: &Process) -> Row<'static> {
     let pid = format!("{:>7}", p.id.pid);
     let user = clip(&p.user, 10);
-    let cpu = match p.cpu_pct {
-        None => "—".to_string(),
-        Some(v) => format!("{v:.1}"),
-    };
+    let cpu_cell = cpu_cell(p.cpu_pct);
     let rss = format::bytes(p.rss_bytes);
     let time_plus = format::time_plus(p.cpu_time_total);
-    let age = format::time_plus(p.age);
+    let age = format::age(p.age);
     let state_cell = state_cell(p.state);
     let cmd = render_command(p);
 
-    Row::new(vec![
+    let row = Row::new(vec![
         Cell::from(pid),
         Cell::from(user),
-        Cell::from(cpu),
+        cpu_cell,
         Cell::from(rss),
         Cell::from(time_plus),
         state_cell,
         Cell::from(age),
         Cell::from(cmd),
-    ])
+    ]);
+    if p.is_kernel_thread {
+        row.style(Style::default().add_modifier(Modifier::DIM))
+    } else {
+        row
+    }
+}
+
+fn cpu_cell(cpu_pct: Option<f32>) -> Cell<'static> {
+    match cpu_pct {
+        None => Cell::from(Span::styled(
+            "—",
+            Style::default().add_modifier(Modifier::DIM),
+        )),
+        Some(v) => {
+            let style = if v >= CPU_DANGER_PCT {
+                Style::default().fg(Color::Red)
+            } else if v >= CPU_WARN_PCT {
+                Style::default().fg(Color::Yellow)
+            } else if v < 1.0 {
+                Style::default().add_modifier(Modifier::DIM)
+            } else {
+                Style::default()
+            };
+            Cell::from(Span::styled(format!("{v:.1}"), style))
+        }
+    }
 }
 
 fn clip(s: &str, max: usize) -> String {

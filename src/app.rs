@@ -5,7 +5,7 @@ use crossbeam_channel::{Receiver, Sender, bounded, select};
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::DefaultTerminal;
 
-use crate::{process::Snapshot, ui};
+use crate::{consts::EVENT_CHANNEL_CAP, process::Snapshot, ui};
 
 pub mod event;
 pub mod state;
@@ -13,9 +13,18 @@ pub mod state;
 use event::Focus;
 use state::{App, SignalModal};
 
-pub fn run(snapshot_rx: Receiver<Arc<Snapshot>>, initial_filter: String) -> anyhow::Result<()> {
+pub fn run(
+    snapshot_rx: Receiver<Arc<Snapshot>>,
+    initial_filter: String,
+    hide_kernel_threads: bool,
+) -> anyhow::Result<()> {
     let mut terminal = ratatui::try_init().context("failed to initialize terminal")?;
-    let result = run_loop(&mut terminal, snapshot_rx, initial_filter);
+    let result = run_loop(
+        &mut terminal,
+        snapshot_rx,
+        initial_filter,
+        hide_kernel_threads,
+    );
     ratatui::restore();
     result
 }
@@ -24,11 +33,12 @@ fn run_loop(
     terminal: &mut DefaultTerminal,
     snapshot_rx: Receiver<Arc<Snapshot>>,
     initial_filter: String,
+    hide_kernel_threads: bool,
 ) -> anyhow::Result<()> {
-    let (event_tx, event_rx) = bounded::<Event>(64);
+    let (event_tx, event_rx) = bounded::<Event>(EVENT_CHANNEL_CAP);
     spawn_event_thread(event_tx);
 
-    let mut app = App::new(initial_filter);
+    let mut app = App::new(initial_filter, hide_kernel_threads);
 
     loop {
         app.ensure_tree_built();

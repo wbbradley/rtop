@@ -19,3 +19,6 @@ pub const MIN_ROWS: u16 = 24;
 pub const ERROR_FLASH_DURATION: Duration = Duration::from_secs(3);
 pub const CPU_WARN_PCT: f32 = 50.0;
 pub const CPU_DANGER_PCT: f32 = 80.0;
+pub const EVENT_CHANNEL_CAP: usize = 64;
+pub const MACOS_ARGMAX_FALLBACK: usize = 256 * 1024;
+pub const KERNEL_THREAD_PARENT_PID: i32 = 2;

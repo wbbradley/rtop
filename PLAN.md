@@ -162,23 +162,4 @@ Threads, renice, kill-tree, multi-select, `cwd:` filter, search OR/negation, man
 
 ## Next Up
 
-### Phase 7 — Polish
-
-Visual and behavioral refinement to ship-quality.
-
-**Deliverables:**
-- Color rules per the architecture reference: CPU% thresholds, STATE colors, kernel thread dimming (Linux), USER cyan on parent transition, search prefix bold cyan.
-- Zombie rendering: STATE `Z` red bold; treat `cpu_pct = Some(0.0)`; show as normal in tree.
-- Kernel-thread handling: Linux backend marks `is_kernel_thread = true` for descendants of PID 2; renderer dims their rows.
-- Empty-cmdline fallback: render `[<comm>]` (already required in Phase 1; verify it surfaces correctly here once colors are in).
-- Age formatter polish: largest-two units, never milliseconds, right-aligned, fixed column width.
-- TIME+ formatter: simplified (`1h23m`, `12m45s`), no centiseconds.
-- `--no-kernel-threads`: app-level filter that excludes kernel threads at filter stage; respects flag at startup.
-- README: replace screenshot placeholder with a real screenshot; add a short feature-tour section.
-- Verify all magic numbers have been pulled into `consts.rs` (audit pass).
-
-**Tests (unit only):**
-- Age formatter boundaries (just-under-a-day, just-over-a-day, etc.).
-- `--no-kernel-threads` filter behavior.
-
-**Done when:** colors match spec, `chk` clean, README has a real screenshot, no magic numbers anywhere outside `consts.rs`.
+_(no work queued)_

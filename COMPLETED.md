@@ -101,6 +101,23 @@ Stood up `MacOsProcessSource` so rtop runs on macOS with the same UI surface as 
 - 4 new unit tests (62 total): `smoke` (asserts `getpid()` is in the live snapshot), `map_state_known_values`, `parse_procargs2_basic` (hand-built buffer with `argc=2 | exec_path | padding | argv[0] | argv[1] | env`), `parse_procargs2_empty_on_short_buffer`, `parse_procargs2_zero_argc`.
 - `chk` clean on macOS (rustfmt + clippy `-D warnings`); `cargo nextest run` green (62 passed); release build succeeds.
 
+## Phase 7 — Polish
+
+Final ship-quality polish — color rules, age formatter, kernel-thread filter, magic-number audit, README feature tour:
+
+- `src/consts.rs`: added `EVENT_CHANNEL_CAP: usize = 64`, `MACOS_ARGMAX_FALLBACK: usize = 256 * 1024`, `KERNEL_THREAD_PARENT_PID: i32 = 2`.
+- `src/format.rs`: implemented `age()` for the largest-two-units rule (`1d4h`, `4h12m`, `12m32s`, `32s`); local consts `SECS_PER_MIN`/`SECS_PER_HOUR`/`SECS_PER_DAY`. Removed `#[allow(dead_code)]`. Replaced the `age_seconds` stub test with 10 boundary cases (zero, sub-minute, minute boundary, mid-hour, hour boundary, just-under-a-day, day boundary, days+hours).
+- `src/source/linux.rs`: kernel-thread marking is now a transitive BFS from `KERNEL_THREAD_PARENT_PID` over a `parent → children` map built once after the per-pid loop. Replaces the in-loop `ppid == 2 || pid == 2` heuristic. Added `HashSet`/`VecDeque` imports.
+- `src/source/macos.rs`: `read_argmax().unwrap_or(MACOS_ARGMAX_FALLBACK)` instead of an inline literal.
+- `src/ui/load_view.rs`: new `cpu_cell()` helper applies CPU% color thresholds — red ≥ `CPU_DANGER_PCT`, yellow ≥ `CPU_WARN_PCT`, dim < 1.0, dim `—` for `None`. Whole row gets `Modifier::DIM` when `is_kernel_thread` (composes with `Modifier::REVERSED` for selection). AGE column switched from `format::time_plus` to `format::age`.
+- `src/ui/tree_view.rs`: matching `cpu_span()` helper returning a `Span<'static>` with the same threshold rules; preserves the existing `{:>5.1}` width. Whole `Line` gets `Modifier::DIM` when `is_kernel_thread`.
+- `src/main.rs`: added `--no-kernel-threads` clap flag; threaded through `app::run`. `--interval` default-value comment now cross-references `consts::SAMPLE_INTERVAL`.
+- `src/app.rs`: `run` / `run_loop` accept `hide_kernel_threads: bool`; `bounded::<Event>(EVENT_CHANNEL_CAP)`.
+- `src/app/state.rs`: new `App::hide_kernel_threads` field; `App::new(initial_filter, hide_kernel_threads)`; `refilter()` retains only non-kernel-thread indices when the flag is set. Updated all 6 existing test call sites; added two new tests (`no_kernel_threads_excludes_kernel_threads`, `kernel_threads_included_when_flag_off`) backed by a `snap_with_kernel_threads()` fixture that flags pids 2 and 4.
+- `README.md`: added `## Features` section between `## Status` and `## Screenshot` covering the three-pane TUI, search DSL, sort modes, tree, signal modal, pause, CLI flags, and Linux+macOS support.
+- 11 new unit tests (84 total): 9 net-new `format::age` boundaries (replacing the 1-case stub) + 2 kernel-thread filter tests.
+- `chk` clean; `cargo nextest run` green (73 tests on macOS — 11 Linux-only smoke + parser cases skipped via cfg).
+
 ## Phase 5.5 — Substring search (drop fuzzy)
 
 Replaced the bare-term fuzzy matcher with case-insensitive substring matching so all terms (prefixed and bare) share the same semantics; dropped the `nucleo-matcher` dependency:

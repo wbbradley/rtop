@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet, VecDeque},
     time::{Duration, Instant, SystemTime},
 };
 
@@ -7,6 +7,7 @@ use anyhow::{Context, anyhow};
 use procfs::{Current, ProcError, process::Process as ProcProcess};
 
 use crate::{
+    consts::KERNEL_THREAD_PARENT_PID,
     process::{Process, ProcessId, Snapshot, SystemStats},
     source::ProcessSource,
 };
@@ -96,7 +97,6 @@ impl ProcessSource for LinuxProcessSource {
                 .unwrap_or(Duration::ZERO);
 
             let rss_bytes = stat.rss.saturating_mul(self.page_size);
-            let is_kernel_thread = stat.ppid == 2 || stat.pid == 2;
 
             let id = ProcessId {
                 pid: stat.pid,
@@ -115,8 +115,29 @@ impl ProcessSource for LinuxProcessSource {
                 cpu_pct: None,
                 cpu_time_total,
                 age,
-                is_kernel_thread,
+                is_kernel_thread: false,
             });
+        }
+
+        let mut children_of: HashMap<i32, Vec<i32>> = HashMap::new();
+        for p in &processes {
+            children_of.entry(p.ppid).or_default().push(p.id.pid);
+        }
+        let mut kernel: HashSet<i32> = HashSet::new();
+        let mut queue: VecDeque<i32> = VecDeque::new();
+        queue.push_back(KERNEL_THREAD_PARENT_PID);
+        while let Some(parent) = queue.pop_front() {
+            if !kernel.insert(parent) {
+                continue;
+            }
+            if let Some(kids) = children_of.get(&parent) {
+                for &c in kids {
+                    queue.push_back(c);
+                }
+            }
+        }
+        for p in processes.iter_mut() {
+            p.is_kernel_thread = kernel.contains(&p.id.pid);
         }
 
         let mut by_id = HashMap::with_capacity(processes.len());

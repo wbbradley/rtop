@@ -4,6 +4,10 @@ const KIB: u64 = 1 << 10;
 const MIB: u64 = 1 << 20;
 const GIB: u64 = 1 << 30;
 
+const SECS_PER_MIN: u64 = 60;
+const SECS_PER_HOUR: u64 = 60 * 60;
+const SECS_PER_DAY: u64 = 24 * 60 * 60;
+
 pub fn bytes(b: u64) -> String {
     if b < KIB {
         return format!("{b}B");
@@ -23,9 +27,23 @@ pub fn bytes(b: u64) -> String {
     }
 }
 
-#[allow(dead_code)]
 pub fn age(d: Duration) -> String {
-    format!("{}s", d.as_secs())
+    let total = d.as_secs();
+    if total >= SECS_PER_DAY {
+        let days = total / SECS_PER_DAY;
+        let hours = (total % SECS_PER_DAY) / SECS_PER_HOUR;
+        format!("{days}d{hours}h")
+    } else if total >= SECS_PER_HOUR {
+        let hours = total / SECS_PER_HOUR;
+        let mins = (total % SECS_PER_HOUR) / SECS_PER_MIN;
+        format!("{hours}h{mins:02}m")
+    } else if total >= SECS_PER_MIN {
+        let mins = total / SECS_PER_MIN;
+        let secs = total % SECS_PER_MIN;
+        format!("{mins}m{secs:02}s")
+    } else {
+        format!("{total}s")
+    }
 }
 
 // Phase 7 will refine the boundary set; this is the simplified Phase 2 helper
@@ -101,9 +119,53 @@ mod tests {
     }
 
     #[test]
-    fn age_seconds() {
+    fn age_zero() {
         assert_eq!(age(Duration::from_secs(0)), "0s");
-        assert_eq!(age(Duration::from_secs(42)), "42s");
+    }
+
+    #[test]
+    fn age_seconds_under_minute() {
+        assert_eq!(age(Duration::from_secs(32)), "32s");
+    }
+
+    #[test]
+    fn age_just_under_a_minute() {
+        assert_eq!(age(Duration::from_secs(59)), "59s");
+    }
+
+    #[test]
+    fn age_minute_boundary() {
+        assert_eq!(age(Duration::from_secs(60)), "1m00s");
+    }
+
+    #[test]
+    fn age_minutes_seconds() {
+        assert_eq!(age(Duration::from_secs(12 * 60 + 32)), "12m32s");
+    }
+
+    #[test]
+    fn age_hour_boundary() {
+        assert_eq!(age(Duration::from_secs(3600)), "1h00m");
+    }
+
+    #[test]
+    fn age_hours_minutes() {
+        assert_eq!(age(Duration::from_secs(4 * 3600 + 12 * 60 + 5)), "4h12m");
+    }
+
+    #[test]
+    fn age_just_under_a_day() {
+        assert_eq!(age(Duration::from_secs(24 * 3600 - 1)), "23h59m");
+    }
+
+    #[test]
+    fn age_day_boundary() {
+        assert_eq!(age(Duration::from_secs(24 * 3600)), "1d0h");
+    }
+
+    #[test]
+    fn age_days_hours() {
+        assert_eq!(age(Duration::from_secs(86400 + 4 * 3600 + 30 * 60)), "1d4h");
     }
 
     #[test]

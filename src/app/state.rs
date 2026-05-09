@@ -46,6 +46,8 @@ pub struct App {
     pub help_open: bool,
     pub signal_modal: Option<SignalModal>,
     pub flash: Option<(String, Instant)>,
+
+    pub hide_kernel_threads: bool,
 }
 
 pub fn hint_for(focus: Focus) -> &'static str {
@@ -89,7 +91,7 @@ pub fn flash_active(flash: &Option<(String, Instant)>, now: Instant) -> Option<&
 }
 
 impl App {
-    pub fn new(initial_filter: String) -> Self {
+    pub fn new(initial_filter: String, hide_kernel_threads: bool) -> Self {
         let query = parse(&initial_filter);
         Self {
             latest: None,
@@ -111,6 +113,7 @@ impl App {
             help_open: false,
             signal_modal: None,
             flash: None,
+            hide_kernel_threads,
         }
     }
 
@@ -127,6 +130,10 @@ impl App {
             return;
         };
         self.filtered_indices = filter(&self.query, snap, self.sort);
+        if self.hide_kernel_threads {
+            self.filtered_indices
+                .retain(|&i| !snap.processes[i].is_kernel_thread);
+        }
 
         if let Some(target_pid) = self.query.auto_select_pid
             && let Some(pos) = self.filtered_indices.iter().position(|&i| {
@@ -323,7 +330,7 @@ mod tests {
     #[test]
     fn cursor_resets_on_selection_change() {
         let s = snap();
-        let mut app = App::new(String::new());
+        let mut app = App::new(String::new(), false);
         app.latest = Some(s.clone());
         app.refilter();
 
@@ -370,7 +377,7 @@ mod tests {
     #[test]
     fn cursor_preserved_across_snapshot_when_selection_unchanged() {
         let s1 = snap();
-        let mut app = App::new(String::new());
+        let mut app = App::new(String::new(), false);
         app.latest = Some(s1.clone());
         app.refilter();
         let pid1_pos = app
@@ -464,7 +471,7 @@ mod tests {
     #[test]
     fn signal_target_uses_load_cursor_when_focus_search() {
         let s = snap();
-        let mut app = App::new(String::new());
+        let mut app = App::new(String::new(), false);
         app.latest = Some(s.clone());
         app.refilter();
         app.load_cursor = 0;
@@ -478,7 +485,7 @@ mod tests {
     #[test]
     fn signal_target_uses_load_cursor_when_focus_load() {
         let s = snap();
-        let mut app = App::new(String::new());
+        let mut app = App::new(String::new(), false);
         app.latest = Some(s.clone());
         app.refilter();
         app.load_cursor = 1;
@@ -491,7 +498,7 @@ mod tests {
     #[test]
     fn signal_target_uses_tree_cursor_when_focus_tree() {
         let s = snap();
-        let mut app = App::new(String::new());
+        let mut app = App::new(String::new(), false);
         app.latest = Some(s.clone());
         app.refilter();
         let pid1_pos = app
@@ -515,7 +522,51 @@ mod tests {
 
     #[test]
     fn signal_target_none_without_snapshot() {
-        let app = App::new(String::new());
+        let app = App::new(String::new(), false);
         assert!(signal_target(&app).is_none());
+    }
+
+    fn snap_with_kernel_threads() -> Arc<Snapshot> {
+        let mut procs = vec![mk_proc(1, 0), mk_proc(2, 0), mk_proc(3, 1), mk_proc(4, 2)];
+        // Mark pid 2 and pid 4 as kernel threads.
+        procs[1].is_kernel_thread = true;
+        procs[3].is_kernel_thread = true;
+        let mut by_id = HashMap::new();
+        for (i, p) in procs.iter().enumerate() {
+            by_id.insert(p.id, i);
+        }
+        Arc::new(Snapshot {
+            processes: procs,
+            by_id,
+            sampled_at: Instant::now(),
+            system: SystemStats {
+                load_1: 0.0,
+                load_5: 0.0,
+                load_15: 0.0,
+                mem_total_bytes: 0,
+                mem_used_bytes: 0,
+            },
+        })
+    }
+
+    #[test]
+    fn no_kernel_threads_excludes_kernel_threads() {
+        let s = snap_with_kernel_threads();
+        let mut app = App::new(String::new(), true);
+        app.latest = Some(s.clone());
+        app.refilter();
+        assert_eq!(app.filtered_indices.len(), 2);
+        for &i in &app.filtered_indices {
+            assert!(!s.processes[i].is_kernel_thread);
+        }
+    }
+
+    #[test]
+    fn kernel_threads_included_when_flag_off() {
+        let s = snap_with_kernel_threads();
+        let mut app = App::new(String::new(), false);
+        app.latest = Some(s.clone());
+        app.refilter();
+        assert_eq!(app.filtered_indices.len(), 4);
     }
 }

@@ -33,6 +33,7 @@ use mach2::{
 };
 
 use crate::{
+    consts::MACOS_ARGMAX_FALLBACK,
     process::{Process, ProcessId, Snapshot, SystemStats},
     source::ProcessSource,
 };
@@ -65,7 +66,7 @@ impl MacOsProcessSource {
             .map_err(|e| anyhow!("{e}"))
             .context("failed to read self pidrusage")?;
 
-        let argmax = read_argmax().unwrap_or(256 * 1024);
+        let argmax = read_argmax().unwrap_or(MACOS_ARGMAX_FALLBACK);
         let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as u64;
 
         Ok(Self {

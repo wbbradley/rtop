@@ -20,13 +20,17 @@ use source::ProcessSource;
 #[derive(Parser, Debug)]
 #[command(name = "rtop", version, about = "TUI process monitor")]
 struct Cli {
-    /// Sample interval in seconds.
+    /// Sample interval in seconds. Default mirrors `consts::SAMPLE_INTERVAL` (1.0s).
     #[arg(long, default_value_t = 1.0)]
     interval: f64,
 
     /// Pre-populate the search box with this expression.
     #[arg(long, default_value = "")]
     filter: String,
+
+    /// Hide kernel threads from the load view.
+    #[arg(long)]
+    no_kernel_threads: bool,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -41,7 +45,7 @@ fn main() -> anyhow::Result<()> {
     install_panic_hook();
 
     let rx = sampler::spawn(source, interval);
-    app::run(rx, cli.filter)
+    app::run(rx, cli.filter, cli.no_kernel_threads)
 }
 
 fn install_panic_hook() {

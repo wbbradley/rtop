@@ -8,7 +8,7 @@ use ratatui::{
 
 use crate::{
     app::state::App,
-    consts::SCROLLOFF,
+    consts::{CPU_DANGER_PCT, CPU_WARN_PCT, SCROLLOFF},
     format,
     process::Process,
     tree::{GutterKind, TreeNode},
@@ -102,10 +102,7 @@ fn clamp_offset(mut offset: usize, cursor: usize, total: usize, visible: usize) 
 
 fn build_line(p: &Process, node: &TreeNode, parent_user: Option<&str>) -> Line<'static> {
     let pid = format!("{:>7}", p.id.pid);
-    let cpu = match p.cpu_pct {
-        None => "    —".to_string(),
-        Some(v) => format!("{v:>5.1}"),
-    };
+    let cpu_span = cpu_span(p.cpu_pct);
     let rss = format!("{:>8}", format::bytes(p.rss_bytes));
 
     let gutter = build_gutter(node);
@@ -114,7 +111,7 @@ fn build_line(p: &Process, node: &TreeNode, parent_user: Option<&str>) -> Line<'
     let mut spans: Vec<Span<'static>> = Vec::with_capacity(8);
     spans.push(Span::raw(pid));
     spans.push(Span::raw(" "));
-    spans.push(Span::raw(cpu));
+    spans.push(cpu_span);
     spans.push(Span::raw(" "));
     spans.push(Span::raw(rss));
     spans.push(Span::raw("  "));
@@ -132,7 +129,30 @@ fn build_line(p: &Process, node: &TreeNode, parent_user: Option<&str>) -> Line<'
             Style::default().fg(Color::Cyan),
         ));
     }
-    Line::from(spans)
+    let line = Line::from(spans);
+    if p.is_kernel_thread {
+        line.style(Style::default().add_modifier(Modifier::DIM))
+    } else {
+        line
+    }
+}
+
+fn cpu_span(cpu_pct: Option<f32>) -> Span<'static> {
+    match cpu_pct {
+        None => Span::styled("    —", Style::default().add_modifier(Modifier::DIM)),
+        Some(v) => {
+            let style = if v >= CPU_DANGER_PCT {
+                Style::default().fg(Color::Red)
+            } else if v >= CPU_WARN_PCT {
+                Style::default().fg(Color::Yellow)
+            } else if v < 1.0 {
+                Style::default().add_modifier(Modifier::DIM)
+            } else {
+                Style::default()
+            };
+            Span::styled(format!("{v:>5.1}"), style)
+        }
+    }
 }
 
 fn build_gutter(node: &TreeNode) -> String {
