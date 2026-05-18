@@ -21,7 +21,7 @@ Search box state is canonical. Load view filters/sorts off it. Tree shows spine 
 
 - Prefixed terms (case-insensitive substring): `pid:`, `ppid:`, `user:`, `name:`, `cmd:`, `state:`.
 - Bare terms: case-insensitive substring match against `name + " " + cmdline + " " + user`.
-- Space-separated terms = AND. No OR/negation in v1.
+- Space-separated terms within an OR-group = AND. Comma separates OR-groups (adjacent to whitespace or token boundary; commas inside a token are literal). No negation in v1.
 - `pid:X` is special: exact equality, auto-scrolls + highlights the row in load view, does not filter the rest out. (All other prefixes filter normally.)
 
 ### Refresh & threading
@@ -156,7 +156,7 @@ No magic numbers anywhere. All tunables live in `consts.rs`:
 
 ### Out of v1 scope
 
-Threads, renice, kill-tree, multi-select, `cwd:` filter, search OR/negation, manual h/l fold ops in tree, runtime pane resize, config file, theming/truecolor.
+Threads, renice, kill-tree, multi-select, `cwd:` filter, search negation, manual h/l fold ops in tree, runtime pane resize, config file, theming/truecolor.
 
 ---
 

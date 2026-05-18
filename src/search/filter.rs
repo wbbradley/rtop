@@ -9,15 +9,13 @@ use crate::{
 pub fn filter(query: &Query, snap: &Snapshot, sort: SortKey) -> Vec<usize> {
     let mut indices: Vec<usize> = (0..snap.processes.len()).collect();
 
-    if !query.terms.is_empty() {
+    if !query.groups.is_empty() {
         indices.retain(|&i| {
             let p = &snap.processes[i];
-            for term in &query.terms {
-                if !term_matches(p, term) {
-                    return false;
-                }
-            }
-            true
+            query
+                .groups
+                .iter()
+                .any(|group| group.iter().all(|term| term_matches(p, term)))
         });
     }
 
@@ -250,5 +248,56 @@ mod tests {
         assert!(result_pids.contains(&42));
         assert!(result_pids.contains(&101));
         assert!(result_pids.contains(&303));
+    }
+
+    #[test]
+    fn or_two_bare_terms() {
+        let snap = fixture();
+        let q = crate::search::parse("firefox, vim");
+        let r = filter(&q, &snap, SortKey::Cpu);
+        let result_pids = pids(&snap, &r);
+        assert_eq!(result_pids.len(), 2);
+        assert!(result_pids.contains(&202));
+        assert!(result_pids.contains(&303));
+    }
+
+    #[test]
+    fn or_two_users() {
+        let snap = fixture();
+        let q = crate::search::parse("user:root, user:wbbradley");
+        let r = filter(&q, &snap, SortKey::Cpu);
+        assert_eq!(r.len(), snap.processes.len());
+    }
+
+    #[test]
+    fn and_within_group_or_across_groups() {
+        let snap = fixture();
+        let q = crate::search::parse("user:root name:sshd, name:firefox");
+        let r = filter(&q, &snap, SortKey::Cpu);
+        let result_pids = pids(&snap, &r);
+        assert_eq!(result_pids.len(), 2);
+        assert!(result_pids.contains(&42));
+        assert!(result_pids.contains(&202));
+    }
+
+    #[test]
+    fn or_with_pid_only_group_matches_all() {
+        // A group consisting solely of `pid:` terms matches every process
+        // (pid: doesn't filter). Hence the OR matches everything.
+        let snap = fixture();
+        let q = crate::search::parse("pid:42, name:nonexistent");
+        let r = filter(&q, &snap, SortKey::Cpu);
+        assert_eq!(r.len(), snap.processes.len());
+    }
+
+    #[test]
+    fn empty_query_after_dropping_empty_groups() {
+        let snap = fixture();
+        for input in [",", " , , "] {
+            let q = crate::search::parse(input);
+            assert!(q.groups.is_empty(), "expected no groups for {input:?}");
+            let r = filter(&q, &snap, SortKey::Cpu);
+            assert_eq!(r.len(), snap.processes.len());
+        }
     }
 }

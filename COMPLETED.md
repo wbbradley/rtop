@@ -148,3 +148,15 @@ Bumped the default sample/refresh cadence from 1s to 5s for a calmer passive mon
 - `PLAN.md` Architecture Reference: two stale "1s" references updated to "5s" (data-flow section and constants list).
 - `CHANGELOG.md`: added `[Unreleased]` section above `[0.1.1]` noting the bump and `--interval 1` as the escape hatch.
 - `cargo run -- --help` confirms `[default: 5]`; `chk` clean; `cargo test` green (69 passed). CPU% math was unaffected (already interval-relative).
+
+## Comma-separated OR terms in search
+
+Extended the search DSL with a top-level OR operator while preserving the existing AND-of-terms semantics inside each group:
+
+- `src/search/parser.rs`: replaced `Query { terms: Vec<Term>, … }` with `Query { groups: Vec<Vec<Term>>, … }`. `parse()` now whitespace-tokenizes, peels leading/trailing commas off each token as OR-separators (a token of all commas peels both ways), runs the existing single-term logic on the residue, and drops empty groups silently. Commas embedded in a token (e.g. `user:root,alice`, `firefox,vim`) remain literal. `auto_select_pid` is the first valid `pid:<int>` encountered left-to-right across all groups.
+- `src/search/filter.rs`: retain predicate became `groups.iter().any(|g| g.iter().all(term_matches))`. Empty `groups` ⇒ no filtering. A pid-only group still matches everything (consistent with the existing single-group `pid:` behavior).
+- `src/ui/help_modal.rs`: added a `","` → `OR groups` binding under `[ search ]`.
+- `README.md`: DSL bullet updated to "Space-separated terms within a group are AND-ed; a comma separates OR-groups."
+- `PLAN.md`: Search DSL section updated; `search OR/negation` removed from the out-of-scope list (only `search negation` remains).
+- Comma styling in the search box was deliberately deferred to keep the diff focused; separator commas render plain.
+- New parser tests (15) cover token-boundary commas, literal commas inside tokens, leading/trailing/multiple commas, comma-only tokens, multi-group queries, and `pid:` in non-first groups. New filter tests (5) cover OR of bare terms, OR of prefixed terms, AND-within-OR-across, pid-only OR group, and all-empty-groups inputs. `chk` clean; `cargo test` green (86 passed).

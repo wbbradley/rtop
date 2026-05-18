@@ -9,7 +9,7 @@ Early development; see [PLAN.md](PLAN.md) for roadmap.
 ## Features
 
 - **Vim-style three-pane TUI**: search box, load-sorted process list, context-sensitive process tree.
-- **Substring search DSL**: `pid:`, `ppid:`, `user:`, `name:`, `cmd:`, `state:` prefixes; bare terms search across name+cmdline+user. Space-separated terms are AND-ed.
+- **Substring search DSL**: `pid:`, `ppid:`, `user:`, `name:`, `cmd:`, `state:` prefixes; bare terms search across name+cmdline+user. Space-separated terms within a group are AND-ed; a comma separates OR-groups.
 - **Sort modes**: CPU%, RSS, TIME+, AGE — cycle with `s`.
 - **Process tree**: spine of ancestors + DFS subtree of the load-view selection. `Enter` drills into a PID; tree cursor navigates with `j`/`k`/`gg`/`G`/Ctrl-d/Ctrl-u.
 - **Signal sending**: press `K` to open the signal modal (TERM/KILL/HUP/INT/USR1/USR2/STOP/CONT). Confirms PID 1 and self-signal.

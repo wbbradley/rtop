@@ -29,6 +29,7 @@ fn content() -> Vec<Line<'static>> {
         binding("Tab/S-Tab", "cycle focus"),
         binding("Esc", "clear or back to search"),
         binding("Ctrl-n/p", "move load cursor"),
+        binding(",", "OR groups"),
         binding("Enter", "select first match"),
         Line::from(""),
         section("[ load ]"),
