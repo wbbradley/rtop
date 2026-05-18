@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.1] - 2026-05-17
+
+### Changed
+- Load pane now defaults to 4 visible data rows (7 rows total including border and header) instead of 10 (13 rows). The tree pane absorbs the freed vertical space, reflecting that filtering is the primary mode of use. `Ctrl-d`/`Ctrl-u` half-page scroll in the load view is now 2 rows (was 5).
+
 ## [0.1.0] - 2026-05-09
 
 Initial public release.
