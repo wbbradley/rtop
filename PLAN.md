@@ -9,7 +9,7 @@ Self-contained context so a developer picking up any phase has what they need.
 ### Layout (top → bottom)
 
 1. **Search box** (3 rows incl. border) — single-line, scrolls horizontally. Initial focus.
-2. **Load view** (~13 rows: header + `LOAD_VIEW_VISIBLE_ROWS` data rows + border) — sorted-by-load list.
+2. **Load view** (~7 rows: header + `LOAD_VIEW_VISIBLE_ROWS` data rows + border) — sorted-by-load list.
 3. **Tree pane** (remainder) — spine + subtree of the load view's selected process.
 4. **Status line** (1 row, no border): `[focus] [N/M procs] [sort: cpu] [paused?]   [load: x x x  mem: x/y GiB]   [error|hint]`.
 
@@ -93,7 +93,7 @@ src/
 No magic numbers anywhere. All tunables live in `consts.rs`:
 
 - `SAMPLE_INTERVAL: Duration` (1s)
-- `LOAD_VIEW_VISIBLE_ROWS: usize` (10)
+- `LOAD_VIEW_VISIBLE_ROWS: usize` (4)
 - `SCROLLOFF: usize` (3)
 - `MIN_COLS: u16` (80), `MIN_ROWS: u16` (24)
 - `ERROR_FLASH_DURATION: Duration` (3s)
@@ -162,4 +162,4 @@ Threads, renice, kill-tree, multi-select, `cwd:` filter, search OR/negation, man
 
 ## Next Up
 
-_(no work queued)_
+_No tasks queued._

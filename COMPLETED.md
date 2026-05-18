@@ -128,3 +128,12 @@ Replaced the bare-term fuzzy matcher with case-insensitive substring matching so
 - `README.md`: top-of-file blurb updated to "substring search box".
 - 3 test updates in `src/search/filter.rs`: renamed `bare_fuzzy_matches_cmdline` → `bare_substring_matches_cmdline` (kept `firef` positive case, added `firefox` positive case, added `frfx` negative case that was a fuzzy-only hit pre-5.5); added `bare_term_is_case_insensitive` (`FIREFOX` matches PID 202); added `multi_bare_terms_and` (`bash wbbradley` matches PID 101 only).
 - `chk` clean; `cargo nextest run` green (58 passed).
+
+## Shrink load pane to 4 visible data rows by default
+
+Made the tree pane the dominant region by default — filtering is the primary mode of use, so the load pane now occupies just 7 rows instead of 13:
+
+- `src/consts.rs`: `LOAD_VIEW_VISIBLE_ROWS: usize` 10 → 4; `LOAD_VIEW_HEIGHT: u16` 13 → 7 (top border + header + 4 data rows + bottom border).
+- `PLAN.md`: Architecture Reference updated to match — load view description `~13 rows` → `~7 rows` and constants list `LOAD_VIEW_VISIBLE_ROWS: usize (10)` → `(4)`.
+- No other code changes required. `src/ui.rs` reads `LOAD_VIEW_HEIGHT` for vertical layout; `src/ui/load_view.rs` clamps `visible_rows = max_rows.min(LOAD_VIEW_VISIBLE_ROWS)` so the smaller cap takes effect automatically; `src/app.rs` derives the half-page distance as `(LOAD_VIEW_VISIBLE_ROWS / 2).max(1)` which becomes 2 (still a valid half page); `SCROLLOFF = 3` is independent of pane size.
+- `chk` clean; `cargo test` green (69 passed).
