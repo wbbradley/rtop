@@ -137,3 +137,14 @@ Made the tree pane the dominant region by default — filtering is the primary m
 - `PLAN.md`: Architecture Reference updated to match — load view description `~13 rows` → `~7 rows` and constants list `LOAD_VIEW_VISIBLE_ROWS: usize (10)` → `(4)`.
 - No other code changes required. `src/ui.rs` reads `LOAD_VIEW_HEIGHT` for vertical layout; `src/ui/load_view.rs` clamps `visible_rows = max_rows.min(LOAD_VIEW_VISIBLE_ROWS)` so the smaller cap takes effect automatically; `src/app.rs` derives the half-page distance as `(LOAD_VIEW_VISIBLE_ROWS / 2).max(1)` which becomes 2 (still a valid half page); `SCROLLOFF = 3` is independent of pane size.
 - `chk` clean; `cargo test` green (69 passed).
+
+## Slow default refresh interval from 1s to 5s
+
+Bumped the default sample/refresh cadence from 1s to 5s for a calmer passive monitor, and wired the CLI default to the constant so the two can't drift again:
+
+- `src/consts.rs`: `SAMPLE_INTERVAL` `Duration::from_secs(1)` → `Duration::from_secs(5)`.
+- `src/main.rs`: clap `--interval` `default_value_t = 1.0` → `default_value_t = consts::SAMPLE_INTERVAL.as_secs_f64()`; doc comment updated to `(5.0s)`. `default_value_t` accepts arbitrary expressions evaluated at `Command`-build time, so the non-const `Duration::as_secs_f64()` call is fine.
+- `src/sampler.rs`: drop-NEWEST rationale comment updated from "With 1s ticks…" to "With a multi-second tick…" so it no longer tracks the old default.
+- `PLAN.md` Architecture Reference: two stale "1s" references updated to "5s" (data-flow section and constants list).
+- `CHANGELOG.md`: added `[Unreleased]` section above `[0.1.1]` noting the bump and `--interval 1` as the escape hatch.
+- `cargo run -- --help` confirms `[default: 5]`; `chk` clean; `cargo test` green (69 passed). CPU% math was unaffected (already interval-relative).

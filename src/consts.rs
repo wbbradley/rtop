@@ -4,7 +4,7 @@
 
 use std::time::Duration;
 
-pub const SAMPLE_INTERVAL: Duration = Duration::from_secs(1);
+pub const SAMPLE_INTERVAL: Duration = Duration::from_secs(5);
 pub const LOAD_VIEW_VISIBLE_ROWS: usize = 4;
 pub const SCROLLOFF: usize = 3;
 pub const SEARCH_BOX_HEIGHT: u16 = 3;

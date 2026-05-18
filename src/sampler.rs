@@ -20,8 +20,8 @@ pub fn spawn(mut source: Box<dyn ProcessSource>, interval: Duration) -> Receiver
                         let arc = Arc::new(snap);
                         prev = Some(arc.clone());
                         // drop-NEWEST on overflow: crossbeam-channel's bounded sender can't
-                        // evict the held value, so we discard the new one. With 1s ticks and
-                        // an event-driven UI, starvation isn't realistic.
+                        // evict the held value, so we discard the new one. With a multi-second
+                        // tick and an event-driven UI, starvation isn't realistic.
                         // TODO: switch to drop-OLDEST when feasible.
                         match tx.try_send(arc) {
                             Ok(()) => {}

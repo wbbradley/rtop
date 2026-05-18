@@ -27,7 +27,7 @@ Search box state is canonical. Load view filters/sorts off it. Tree shows spine 
 ### Refresh & threading
 
 - One sampler thread, one main/UI thread. No tokio. Channel: `crossbeam-channel` carrying `Arc<Snapshot>`.
-- Sampler ticks every `SAMPLE_INTERVAL` (default 1s). UI renders on union of {keypress, new snapshot, terminal resize}.
+- Sampler ticks every `SAMPLE_INTERVAL` (default 5s). UI renders on union of {keypress, new snapshot, terminal resize}.
 - CPU% computed in sampler from `(prev_utime + prev_stime)` vs current; identity is `(pid, start_time)` to handle PID reuse.
 - `space` toggles sampling pause.
 
@@ -92,7 +92,7 @@ src/
 
 No magic numbers anywhere. All tunables live in `consts.rs`:
 
-- `SAMPLE_INTERVAL: Duration` (1s)
+- `SAMPLE_INTERVAL: Duration` (5s)
 - `LOAD_VIEW_VISIBLE_ROWS: usize` (4)
 - `SCROLLOFF: usize` (3)
 - `MIN_COLS: u16` (80), `MIN_ROWS: u16` (24)
@@ -162,4 +162,3 @@ Threads, renice, kill-tree, multi-select, `cwd:` filter, search OR/negation, man
 
 ## Next Up
 
-_No tasks queued._
