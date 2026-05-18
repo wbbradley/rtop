@@ -1,6 +1,6 @@
 [package]
 name = "rtop"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2024"
 description = "A TUI process monitor with vim-style navigation, substring search, and a process tree view."
 repository = "https://github.com/wbbradley/rtop"
