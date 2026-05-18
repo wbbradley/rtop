@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.3] - 2026-05-18
+
+### Added
+- Comma-OR operator in the search DSL. Comma separates top-level OR-groups; space-separated terms within a group still AND. Commas embedded in a single whitespace-delimited token remain literal (e.g. `user:root,alice` is one term with value `root,alice`; `user:root, user:alice` is two OR-groups).
+- Help modal: `,` listed under `[ search ]` as `OR groups`.
+
 ## [0.1.2] - 2026-05-18
 
 ### Changed
