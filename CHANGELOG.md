@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.5] - 2026-05-19
+
+### Added
+- Focused pane indicator: the active pane's border and title now render in a distinct orange accent (`Color::Rgb(254, 128, 25)`). Cycles with `Tab` / `Shift-Tab`. Non-focused panes keep the default border; the reverse-video cursor row inside Load and Tree is unchanged. Terminals without truecolor fall back to the nearest representable color via ratatui's backend.
+
 ## [0.1.4] - 2026-05-19
 
 ### Changed
