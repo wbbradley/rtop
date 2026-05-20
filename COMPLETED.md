@@ -160,3 +160,14 @@ Extended the search DSL with a top-level OR operator while preserving the existi
 - `PLAN.md`: Search DSL section updated; `search OR/negation` removed from the out-of-scope list (only `search negation` remains).
 - Comma styling in the search box was deliberately deferred to keep the diff focused; separator commas render plain.
 - New parser tests (15) cover token-boundary commas, literal commas inside tokens, leading/trailing/multiple commas, comma-only tokens, multi-group queries, and `pid:` in non-first groups. New filter tests (5) cover OR of bare terms, OR of prefixed terms, AND-within-OR-across, pid-only OR group, and all-empty-groups inputs. `chk` clean; `cargo test` green (86 passed).
+
+## Tree view: wrap long commands on argv-token boundaries
+
+Made the tree pane soft-wrap long argv onto continuation lines indented to the command's start column, so the full command is readable without horizontal scrolling. Tree view only — load view unchanged.
+
+- `src/ui/tree_view.rs`: rewrote `build_line` → `build_row(p, node, parent_user, pane_width) -> Vec<Line<'static>>`. New pure helpers `wrap_argv` (greedy token packing with first/cont budgets, hard-break at column edge, ellipsize on overflow), `row_budgets`, `row_visual_height`, `continuation_prefix`. Refactored `clamp_offset` to take a per-row height fn — top scrolloff, then walk-back-from-`last_idx`-summing-heights to enforce bottom scrolloff, then "cursor visible" overrides everything. The 24-col metadata block and ancestor `│  ` spine chars are preserved on continuation lines; only the current node's `└─ ` / `├─ ` is blanked.
+- `render()` now precomputes a per-row heights vector, calls `clamp_offset`, and renders logical rows from the clamped offset until `visible_rows` visual lines are consumed. Selection styling (`Modifier::REVERSED`) is applied per-line so the highlight covers all wrap continuations. Kernel-thread `Modifier::DIM` composes the same way.
+- Cap: `MAX_TREE_WRAP_LINES = 3` local const; ellipsis (`…`) terminates the 3rd line when more would follow. Kernel-thread / no-cmdline rows still render as `[name]` on a single line. No new `consts.rs` entries; no changes to `app.rs`, `app/state.rs`, `consts.rs`, `tree.rs`, or `load_view.rs`.
+- 13 new unit tests (99 total): `wrap_argv` boundary cases (short, packing, token-boundary wrap, hard-break, hard-break-with-truncation, 3-line cap with ellipsis, asymmetric first/cont budgets, zero-first-budget guard); `clamp_offset` (empty, uniform top scrolloff, uniform bottom scrolloff, tall row forces higher offset, cursor row taller than viewport top-aligns cursor).
+- `chk` clean (clippy applied 2 micro-fixes); `cargo test` green (99 passed).
+
