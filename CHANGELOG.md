@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.4] - 2026-05-19
+
+### Changed
+- Tree pane now soft-wraps long commands onto continuation lines instead of running off the right edge. Wrapping breaks on argv-token boundaries, hard-breaks single tokens wider than the pane, and caps any one row at 3 visual lines (with a trailing `…` when more would follow). Continuation lines are indented to the command's start column and preserve the ancestor spine `│` characters. Selection highlight and kernel-thread dimming span all visual lines of the wrapped row. Cursor navigation (`j`/`k`/`gg`/`G`/`Ctrl-d`/`Ctrl-u`) still moves by logical rows; continuations are invisible to the cursor.
+
 ## [0.1.3] - 2026-05-18
 
 ### Added
