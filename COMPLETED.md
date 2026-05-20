@@ -171,3 +171,14 @@ Made the tree pane soft-wrap long argv onto continuation lines indented to the c
 - 13 new unit tests (99 total): `wrap_argv` boundary cases (short, packing, token-boundary wrap, hard-break, hard-break-with-truncation, 3-line cap with ellipsis, asymmetric first/cont budgets, zero-first-budget guard); `clamp_offset` (empty, uniform top scrolloff, uniform bottom scrolloff, tall row forces higher offset, cursor row taller than viewport top-aligns cursor).
 - `chk` clean (clippy applied 2 micro-fixes); `cargo test` green (99 passed).
 
+## Focused pane indicator: orange border on the active pane
+
+Made the focused pane visually distinct by coloring its border and title in a truecolor orange (`Color::Rgb(254, 128, 25)`). First deliberate truecolor use in the codebase — every other semantic color (CPU, STATE, kernel-thread dim, USER, search-prefix cyan, errors) still uses named ANSI variants.
+
+- `src/consts.rs`: added `FOCUS_ACCENT: Color = Color::Rgb(254, 128, 25)` and the `use ratatui::style::Color;` import.
+- `src/ui.rs`: added `pub fn focused_block(title, focused) -> Block<'static>` helper — returns a bordered+titled block, with `border_style` + `title_style` set to `FOCUS_ACCENT` when focused. Applied to the pre-snapshot "loading…" placeholder block.
+- `src/ui/search_box.rs`, `src/ui/load_view.rs`, `src/ui/tree_view.rs`: replaced direct `Block::bordered().title(...)` construction with `crate::ui::focused_block(...)` against the relevant `app.focus == Focus::*` predicate. Dropped the now-unused `Block` import from each.
+- `PLAN.md` Architecture Reference: Visual rules bullet relaxed from "ANSI 16 only in v1, no truecolor, no theming" to "ANSI 16 for semantic colors … One truecolor accent (FOCUS_ACCENT, RGB 254,128,25) reserved for the focused-pane indicator. No theming." Out-of-v1-scope dropped `truecolor` from `theming/truecolor`.
+- No changes to `app/state.rs`, `app/event.rs`, key handling, status line, help modal, or signal modal. Reverse-video cursor row inside Load and Tree is untouched.
+- `chk` clean; `cargo test` green (99 passed). No new tests — render path is exercised end-to-end manually per the task spec.
+

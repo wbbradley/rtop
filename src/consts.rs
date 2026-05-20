@@ -4,6 +4,8 @@
 
 use std::time::Duration;
 
+use ratatui::style::Color;
+
 pub const SAMPLE_INTERVAL: Duration = Duration::from_secs(5);
 pub const LOAD_VIEW_VISIBLE_ROWS: usize = 4;
 pub const SCROLLOFF: usize = 3;
@@ -22,3 +24,4 @@ pub const CPU_DANGER_PCT: f32 = 80.0;
 pub const EVENT_CHANNEL_CAP: usize = 64;
 pub const MACOS_ARGMAX_FALLBACK: usize = 256 * 1024;
 pub const KERNEL_THREAD_PARENT_PID: i32 = 2;
+pub const FOCUS_ACCENT: Color = Color::Rgb(254, 128, 25);

@@ -3,13 +3,13 @@ use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Paragraph},
+    widgets::Paragraph,
 };
 
 use crate::app::{event::Focus, state::App};
 
 pub fn render(frame: &mut Frame, area: Rect, app: &App) {
-    let block = Block::bordered().title(" search ");
+    let block = crate::ui::focused_block(" search ", app.focus == Focus::Search);
     let inner = block.inner(area);
 
     let spans = highlight(&app.query_text);

@@ -5,11 +5,11 @@ use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Paragraph},
+    widgets::Paragraph,
 };
 
 use crate::{
-    app::state::App,
+    app::{event::Focus, state::App},
     consts::{CPU_DANGER_PCT, CPU_WARN_PCT, SCROLLOFF},
     format,
     process::Process,
@@ -21,7 +21,7 @@ const MAX_TREE_WRAP_LINES: usize = 3;
 const METADATA_PREFIX_WIDTH: usize = 24;
 
 pub fn render(frame: &mut Frame, area: Rect, app: &App) {
-    let block = Block::bordered().title(" tree ");
+    let block = crate::ui::focused_block(" tree ", app.focus == Focus::Tree);
     let inner = block.inner(area);
     frame.render_widget(block, area);
 

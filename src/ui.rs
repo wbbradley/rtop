@@ -1,13 +1,31 @@
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
+    style::Style,
     widgets::{Block, Paragraph},
 };
 
 use crate::{
-    app::state::App,
-    consts::{LOAD_VIEW_HEIGHT, MIN_COLS, MIN_ROWS, SEARCH_BOX_HEIGHT, STATUS_LINE_HEIGHT},
+    app::{event::Focus, state::App},
+    consts::{
+        FOCUS_ACCENT,
+        LOAD_VIEW_HEIGHT,
+        MIN_COLS,
+        MIN_ROWS,
+        SEARCH_BOX_HEIGHT,
+        STATUS_LINE_HEIGHT,
+    },
 };
+
+pub fn focused_block(title: &'static str, focused: bool) -> Block<'static> {
+    let block = Block::bordered().title(title);
+    if focused {
+        let style = Style::default().fg(FOCUS_ACCENT);
+        block.border_style(style).title_style(style)
+    } else {
+        block
+    }
+}
 
 pub mod help_modal;
 pub mod load_view;
@@ -38,7 +56,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
 
     if app.latest.is_none() {
         // Bordered "loading" placeholder in the load pane until the first snapshot.
-        let block = Block::bordered().title(" load ");
+        let block = focused_block(" load ", app.focus == Focus::Load);
         let inner = block.inner(chunks[1]);
         frame.render_widget(block, chunks[1]);
         let p = Paragraph::new("loading…").alignment(Alignment::Center);

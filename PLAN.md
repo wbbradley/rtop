@@ -126,7 +126,7 @@ No magic numbers anywhere. All tunables live in `consts.rs`:
 
 ### Visual rules
 
-- ANSI 16 only in v1, no truecolor, no theming.
+- ANSI 16 for semantic colors (CPU, STATE, kernel threads, USER, errors). One truecolor accent (`FOCUS_ACCENT`, RGB 254,128,25) reserved for the focused-pane indicator. No theming.
 - Selected row: reverse video.
 - CPU%: yellow > `CPU_WARN_PCT`, red > `CPU_DANGER_PCT`, dim < 1.
 - STATE colors: R=green, S=default, D=red, Z=red bold, T=yellow.
@@ -156,7 +156,7 @@ No magic numbers anywhere. All tunables live in `consts.rs`:
 
 ### Out of v1 scope
 
-Threads, renice, kill-tree, multi-select, `cwd:` filter, search negation, manual h/l fold ops in tree, runtime pane resize, config file, theming/truecolor.
+Threads, renice, kill-tree, multi-select, `cwd:` filter, search negation, manual h/l fold ops in tree, runtime pane resize, config file, theming.
 
 ---
 

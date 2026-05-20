@@ -3,18 +3,18 @@ use ratatui::{
     layout::{Alignment, Constraint, Rect},
     style::{Color, Modifier, Style},
     text::Span,
-    widgets::{Block, Cell, Paragraph, Row, Table},
+    widgets::{Cell, Paragraph, Row, Table},
 };
 
 use crate::{
-    app::state::App,
+    app::{event::Focus, state::App},
     consts::{CPU_DANGER_PCT, CPU_WARN_PCT, LOAD_VIEW_VISIBLE_ROWS, SCROLLOFF},
     format,
     process::Process,
 };
 
 pub fn render(frame: &mut Frame, area: Rect, app: &App) {
-    let block = Block::bordered().title(" load ");
+    let block = crate::ui::focused_block(" load ", app.focus == Focus::Load);
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
