@@ -22,7 +22,7 @@ Search box state is canonical. Load view filters/sorts off it. Tree shows spine 
 - Prefixed terms (case-insensitive substring): `pid:`, `ppid:`, `user:`, `name:`, `cmd:`, `state:`.
 - Bare terms: case-insensitive substring match against `name + " " + cmdline + " " + user`.
 - Space-separated terms within an OR-group = AND. Comma separates OR-groups (adjacent to whitespace or token boundary; commas inside a token are literal). No negation in v1.
-- `pid:X` is special: exact equality, auto-scrolls + highlights the row in load view, does not filter the rest out. (All other prefixes filter normally.)
+- `pid:X` filters by exact PID equality; the cursor auto-positions on the first matching row.
 
 ### Refresh & threading
 

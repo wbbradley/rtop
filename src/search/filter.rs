@@ -26,8 +26,10 @@ pub fn filter(query: &Query, snap: &Snapshot, sort: SortKey) -> Vec<usize> {
 fn term_matches(p: &Process, term: &Term) -> bool {
     match term {
         Term::Prefixed { field, value } => match field {
-            // pid: does NOT filter — it only sets auto_select_pid in the parsed query.
-            Field::Pid => true,
+            Field::Pid => match value.parse::<i32>() {
+                Ok(n) => p.id.pid == n,
+                Err(_) => false,
+            },
             Field::Ppid => match value.parse::<i32>() {
                 Ok(n) => p.ppid == n,
                 Err(_) => false,
@@ -229,12 +231,31 @@ mod tests {
     }
 
     #[test]
-    fn pid_does_not_filter() {
+    fn pid_filters_to_exact_match() {
         let snap = fixture();
         let q = crate::search::parse("pid:42");
         let r = filter(&q, &snap, SortKey::Cpu);
-        assert_eq!(r.len(), snap.processes.len());
+        assert_eq!(pids(&snap, &r), vec![42]);
         assert_eq!(q.auto_select_pid, Some(42));
+    }
+
+    #[test]
+    fn pid_or_group_unions_pids() {
+        let snap = fixture();
+        let q = crate::search::parse("pid:42, pid:303");
+        let r = filter(&q, &snap, SortKey::Cpu);
+        let mut result_pids = pids(&snap, &r);
+        result_pids.sort();
+        assert_eq!(result_pids, vec![42, 303]);
+        assert_eq!(q.auto_select_pid, Some(42));
+    }
+
+    #[test]
+    fn pid_nonexistent_yields_no_matches() {
+        let snap = fixture();
+        let q = crate::search::parse("pid:99999999");
+        let r = filter(&q, &snap, SortKey::Cpu);
+        assert!(r.is_empty());
     }
 
     #[test]
@@ -281,13 +302,11 @@ mod tests {
     }
 
     #[test]
-    fn or_with_pid_only_group_matches_all() {
-        // A group consisting solely of `pid:` terms matches every process
-        // (pid: doesn't filter). Hence the OR matches everything.
+    fn or_pid_and_nonexistent_name_filters_to_pid() {
         let snap = fixture();
         let q = crate::search::parse("pid:42, name:nonexistent");
         let r = filter(&q, &snap, SortKey::Cpu);
-        assert_eq!(r.len(), snap.processes.len());
+        assert_eq!(pids(&snap, &r), vec![42]);
     }
 
     #[test]

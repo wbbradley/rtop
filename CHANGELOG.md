@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Changed
+- **Breaking**: `pid:<X>` now filters the load view to processes whose PID equals `X` (multiple values via OR-groups: `pid:42, pid:7`). Previously `pid:` was special-cased to highlight without filtering, so `Enter`-drill on a row left the entire list visible. The auto-cursor-position behavior is unchanged (cursor lands on the first matching PID). Scripts using `--filter pid:<X>` to keep all rows visible will see the list narrow to that PID.
+
 ## [0.1.5] - 2026-05-19
 
 ### Added

@@ -182,3 +182,14 @@ Made the focused pane visually distinct by coloring its border and title in a tr
 - No changes to `app/state.rs`, `app/event.rs`, key handling, status line, help modal, or signal modal. Reverse-video cursor row inside Load and Tree is untouched.
 - `chk` clean; `cargo test` green (99 passed). No new tests — render path is exercised end-to-end manually per the task spec.
 
+## Make `pid:` filter the load view to the matched PID
+
+Eliminated the special case that made `pid:<X>` highlight-without-filter, so the `Enter`-drill keybinding now actually narrows the load pane.
+
+- `src/search/filter.rs`: `Field::Pid` arm of `term_matches` now does `p.id.pid == value.parse::<i32>()`, mirroring `Field::Ppid`. Dropped the `// pid: does NOT filter` comment.
+- `src/search/filter.rs` tests: renamed `pid_does_not_filter` → `pid_filters_to_exact_match`; renamed `or_with_pid_only_group_matches_all` → `or_pid_and_nonexistent_name_filters_to_pid` with new expectation `vec![42]`. Added `pid_or_group_unions_pids` (`pid:42, pid:303` → both PIDs, cursor lands on 42) and `pid_nonexistent_yields_no_matches`.
+- `PLAN.md` Architecture Reference, Search DSL: replaced the "pid:X is special" bullet with the new "filters by exact PID equality; cursor auto-positions on first match" wording.
+- `CHANGELOG.md`: added an `[Unreleased] / ### Changed` entry flagging the breaking change for anyone using `--filter pid:<X>` to keep all rows visible.
+- `auto_select_pid` cursor-positioning in `App::refilter()` works as-is; no `app/state.rs` changes. Help modal didn't mention `pid:` semantics; no change.
+- `chk` clean; `cargo test` green (101 passed, +3 vs. prior 99 — the prior count grew with the renamed/added tests).
+
