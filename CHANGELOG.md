@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.1] - 2026-05-21
+
+### Fixed
+- Commas now split OR-groups wherever they appear, not just at whitespace boundaries — `bash,dbus-daemon` parses as two OR-groups instead of one literal bare term. A post-comma fragment no longer inherits the prior fragment's prefix. Runs of commas / leading / trailing commas collapse.
+- Non-empty query that matches zero processes now renders a centered `(no matches)` placeholder in the tree pane instead of the full forest. Empty query still shows the full forest.
+
 ## [0.2.0] - 2026-05-20
 
 ### Breaking Changes
