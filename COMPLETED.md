@@ -214,3 +214,14 @@ Re-centered the UI on the search box + tree pane. The load pane was a redundant 
 - `README.md`: rewrote Features to advertise the two-pane match-driven tree model.
 - `CHANGELOG.md` `[Unreleased]`: added `### Changed` entries flagging the breaking removals (load pane, sort cycle, Esc semantics) and the focus-cycle change.
 - `chk` clean; `cargo test` green (80 passed; older load-pane tests retired).
+
+## Comma without whitespace splits OR-groups; empty matched renders `(no matches)`
+
+Fixed two compounding bugs that caused `bash,dbus-daemon` (no spaces) to render the entire process forest:
+
+- `src/search/parser.rs`: rewrote the tokenization loop. For each whitespace-delimited token, split on `,` and close the current OR-group between fragments; non-empty fragments are fed fresh through `push_term` (so the post-comma fragment does not inherit the prior fragment's prefix). Runs of commas / leading / trailing commas collapse via the existing empty-`current` `close_group` guard. Removed the two tests that locked in the old "comma inside token is literal" behavior; added four positives: `comma_inside_bare_token_splits_into_two_groups`, `comma_inside_prefixed_token_splits_and_fragment_does_not_inherit`, `comma_separated_prefixed_terms_keep_each_prefix`, `runs_of_commas_collapse_without_whitespace`.
+- `src/tree.rs`: `build_filtered`'s `matched` argument switched from `&HashSet<i32>` to `Option<&HashSet<i32>>` so the caller can distinguish "no filter active" (`None` → full forest) from "query matched nothing" (`Some(empty)` → empty result). Updated doc comment. Renamed `build_filtered_empty_matched_shows_all` → `build_filtered_none_shows_all`, `build_filtered_multiple_roots_with_empty_matched` → `build_filtered_multiple_roots_with_no_filter`; added `build_filtered_some_empty_returns_empty`. Test helper split into `build` (Some) and `build_unfiltered` (None).
+- `src/app/state.rs`: `ensure_tree_built` now passes `None` when `query.groups.is_empty()`, otherwise `Some(&matched_pids)`. The "empty visible tree" branch below already clears the cursor and caches the key.
+- `src/ui/tree_view.rs`: when the tree is empty and the query is non-empty, render a centered dim `(no matches)` placeholder inside the tree block's inner area. Empty query + empty tree (no snapshot yet) keeps the silent return.
+- `src/search/filter.rs`: added `matches_or_across_groups_no_whitespace` (`name:firefox,name:vim` matches 202 and 303 but not 1).
+- `chk` clean; `cargo test` green (84 passed, +4 vs. prior 80).

@@ -48,24 +48,15 @@ pub fn parse(input: &str) -> Query {
     };
 
     for tok in input.split_whitespace() {
-        let residue = tok.trim_matches(',');
-        let leading = tok.len() - tok.trim_start_matches(',').len();
-        let trailing = tok.len() - tok.trim_end_matches(',').len();
-
-        if residue.is_empty() {
-            // Token is entirely commas (one or more): each is a separator.
-            for _ in 0..tok.len() {
+        let mut first = true;
+        for frag in tok.split(',') {
+            if !first {
                 close_group(&mut current, &mut groups);
             }
-            continue;
-        }
-
-        for _ in 0..leading {
-            close_group(&mut current, &mut groups);
-        }
-        push_term(residue, &mut current, &mut auto_select_pid);
-        for _ in 0..trailing {
-            close_group(&mut current, &mut groups);
+            first = false;
+            if !frag.is_empty() {
+                push_term(frag, &mut current, &mut auto_select_pid);
+            }
         }
     }
     close_group(&mut current, &mut groups);
@@ -252,21 +243,55 @@ mod tests {
     }
 
     #[test]
-    fn comma_inside_token_is_literal() {
-        let q = parse("user:root,alice");
+    fn comma_inside_bare_token_splits_into_two_groups() {
+        let q = parse("bash,dbus-daemon");
         assert_eq!(
             q.groups,
-            vec![vec![Term::Prefixed {
-                field: Field::User,
-                value: "root,alice".into()
-            }]]
+            vec![
+                vec![Term::Bare("bash".into())],
+                vec![Term::Bare("dbus-daemon".into())],
+            ]
         );
     }
 
     #[test]
-    fn comma_inside_bare_token_is_literal() {
-        let q = parse("firefox,vim");
-        assert_eq!(q.groups, vec![vec![Term::Bare("firefox,vim".into())]]);
+    fn comma_inside_prefixed_token_splits_and_fragment_does_not_inherit() {
+        let q = parse("name:vim,emacs");
+        assert_eq!(
+            q.groups,
+            vec![
+                vec![Term::Prefixed {
+                    field: Field::Name,
+                    value: "vim".into()
+                }],
+                vec![Term::Bare("emacs".into())],
+            ]
+        );
+    }
+
+    #[test]
+    fn comma_separated_prefixed_terms_keep_each_prefix() {
+        let q = parse("name:vim,name:emacs");
+        assert_eq!(
+            q.groups,
+            vec![
+                vec![Term::Prefixed {
+                    field: Field::Name,
+                    value: "vim".into()
+                }],
+                vec![Term::Prefixed {
+                    field: Field::Name,
+                    value: "emacs".into()
+                }],
+            ]
+        );
+    }
+
+    #[test]
+    fn runs_of_commas_collapse_without_whitespace() {
+        let expected = vec![vec![Term::Bare("a".into())], vec![Term::Bare("b".into())]];
+        assert_eq!(parse("a,,b").groups, expected);
+        assert_eq!(parse(",a,b,").groups, expected);
     }
 
     #[test]

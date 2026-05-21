@@ -29,6 +29,26 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         return;
     };
     if app.tree_visible.is_empty() {
+        if !app.query.groups.is_empty() && inner.width > 0 && inner.height > 0 {
+            let msg = "(no matches)";
+            let msg_w = msg.chars().count() as u16;
+            let w = msg_w.min(inner.width);
+            let y = inner.y + inner.height.saturating_sub(1) / 2;
+            let x = inner.x + inner.width.saturating_sub(w) / 2;
+            let placeholder_area = Rect {
+                x,
+                y,
+                width: w,
+                height: 1,
+            };
+            frame.render_widget(
+                Paragraph::new(Line::from(Span::styled(
+                    msg,
+                    Style::default().add_modifier(Modifier::DIM),
+                ))),
+                placeholder_area,
+            );
+        }
         return;
     }
 

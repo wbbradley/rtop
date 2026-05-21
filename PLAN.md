@@ -2,6 +2,8 @@
 
 A TUI process monitor in the spirit of `top`/`htop`, with vim-style navigation, a substring search box driving a load-sorted list, and a context-sensitive process tree below.
 
+## Next Up
+
 ## Architecture Reference
 
 Self-contained context so a developer picking up any phase has what they need.

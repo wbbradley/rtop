@@ -42,30 +42,26 @@ pub fn build_parent_to_children(snap: &Snapshot) -> HashMap<i32, Vec<usize>> {
 
 /// Compute the visible forest.
 ///
-/// - If `matched` is empty, the visible set is every process (minus kernel
-///   threads when `hide_kernel_threads`).
-/// - Otherwise, the visible set is the closure of `matched` extended with the
-///   parent chain (root → match) and the complete subtree below each match.
-///   When `hide_kernel_threads`, kernel-thread PIDs are excluded from `matched`
-///   *and* skipped during the closure walk so they never appear in the result.
+/// - `matched == None` ⇒ no filter active: the visible set is every process
+///   (minus kernel threads when `hide_kernel_threads`).
+/// - `matched == Some(set)` ⇒ the visible set is the closure of `set` extended
+///   with the parent chain (root → match) and the complete subtree below each
+///   match. When `hide_kernel_threads`, kernel-thread PIDs are excluded from
+///   `set` *and* skipped during the closure walk so they never appear in the
+///   result. `Some(empty)` is the legitimate "query matched nothing" case and
+///   produces an empty result — distinct from `None`.
 pub fn build_filtered(
     snap: &Snapshot,
     parent_to_children: &HashMap<i32, Vec<usize>>,
     pid_to_idx: &HashMap<i32, usize>,
-    matched: &HashSet<i32>,
+    matched: Option<&HashSet<i32>>,
     hide_kernel_threads: bool,
 ) -> Vec<TreeNode> {
     let allowed = |idx: usize| !hide_kernel_threads || !snap.processes[idx].is_kernel_thread;
 
     let mut keep: HashSet<i32> = HashSet::with_capacity(snap.processes.len());
 
-    if matched.is_empty() {
-        for (i, p) in snap.processes.iter().enumerate() {
-            if allowed(i) {
-                keep.insert(p.id.pid);
-            }
-        }
-    } else {
+    if let Some(matched) = matched {
         let seeds: Vec<i32> = matched
             .iter()
             .copied()
@@ -112,6 +108,12 @@ pub fn build_filtered(
                 if keep.insert(child_pid) {
                     queue.push_back(child_pid);
                 }
+            }
+        }
+    } else {
+        for (i, p) in snap.processes.iter().enumerate() {
+            if allowed(i) {
+                keep.insert(p.id.pid);
             }
         }
     }
@@ -276,17 +278,30 @@ mod tests {
         let p2c = build_parent_to_children(snap);
         let pid_to_idx = build_pid_to_idx(snap);
         let set: HashSet<i32> = matched.iter().copied().collect();
-        build_filtered(snap, &p2c, &pid_to_idx, &set, hide_kernel_threads)
+        build_filtered(snap, &p2c, &pid_to_idx, Some(&set), hide_kernel_threads)
+    }
+
+    fn build_unfiltered(snap: &Snapshot, hide_kernel_threads: bool) -> Vec<TreeNode> {
+        let p2c = build_parent_to_children(snap);
+        let pid_to_idx = build_pid_to_idx(snap);
+        build_filtered(snap, &p2c, &pid_to_idx, None, hide_kernel_threads)
     }
 
     #[test]
-    fn build_filtered_empty_matched_shows_all() {
+    fn build_filtered_none_shows_all() {
         let snap = fixture_simple();
-        let v = build(&snap, &[], false);
+        let v = build_unfiltered(&snap, false);
         let pids = pids_in(&snap, &v);
         assert_eq!(pids, vec![1, 2, 3, 4]);
         let depths: Vec<usize> = v.iter().map(|n| n.depth).collect();
         assert_eq!(depths, vec![0, 1, 1, 2]);
+    }
+
+    #[test]
+    fn build_filtered_some_empty_returns_empty() {
+        let snap = fixture_simple();
+        let v = build(&snap, &[], false);
+        assert!(v.is_empty());
     }
 
     #[test]
@@ -400,8 +415,8 @@ mod tests {
         let v = build(&snap, &[6], true);
         assert!(v.is_empty(), "got {:?}", pids_in(&snap, &v));
 
-        // Empty match with hide_kernel_threads=true → only the non-kthread 1.
-        let v = build(&snap, &[], true);
+        // No filter with hide_kernel_threads=true → only the non-kthread 1.
+        let v = build_unfiltered(&snap, true);
         assert_eq!(pids_in(&snap, &v), vec![1]);
 
         // Without the mask, the kthread chain shows.
@@ -410,10 +425,10 @@ mod tests {
     }
 
     #[test]
-    fn build_filtered_multiple_roots_with_empty_matched() {
-        // Two disjoint roots, no matches → both show.
+    fn build_filtered_multiple_roots_with_no_filter() {
+        // Two disjoint roots, no filter → both show.
         let snap = snap_from(vec![mk_proc(1, 0), mk_proc(2, 1), mk_proc(5, 0)]);
-        let v = build(&snap, &[], false);
+        let v = build_unfiltered(&snap, false);
         // Order: root 1 + its subtree, then root 5. PID ascending.
         assert_eq!(pids_in(&snap, &v), vec![1, 2, 5]);
     }

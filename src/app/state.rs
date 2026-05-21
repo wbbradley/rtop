@@ -171,11 +171,16 @@ impl App {
 
         let pid_to_idx = build_pid_to_idx(&snap);
         let parent_to_children = build_parent_to_children(&snap);
+        let matched_arg = if self.query.groups.is_empty() {
+            None
+        } else {
+            Some(&self.matched_pids)
+        };
         self.tree_visible = build_filtered(
             &snap,
             &parent_to_children,
             &pid_to_idx,
-            &self.matched_pids,
+            matched_arg,
             self.hide_kernel_threads,
         );
 

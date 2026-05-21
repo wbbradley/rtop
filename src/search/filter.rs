@@ -216,4 +216,13 @@ mod tests {
         let q = crate::search::parse("pid:42");
         assert_eq!(q.auto_select_pid, Some(42));
     }
+
+    #[test]
+    fn matches_or_across_groups_no_whitespace() {
+        let snap = fixture();
+        let q = crate::search::parse("name:firefox,name:vim");
+        assert!(matches(&q, pid_of(&snap, 202)));
+        assert!(matches(&q, pid_of(&snap, 303)));
+        assert!(!matches(&q, pid_of(&snap, 1)));
+    }
 }
