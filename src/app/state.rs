@@ -1,11 +1,11 @@
-use std::{sync::Arc, time::Instant};
+use std::{collections::HashSet, sync::Arc, time::Instant};
 
 use crate::{
-    app::event::{Focus, SortKey},
+    app::event::Focus,
     consts::{ERROR_FLASH_DURATION, SCROLLOFF},
     process::{ProcessId, Snapshot},
-    search::{Query, filter, parse},
-    tree::{TreeNode, build_parent_to_children, build_pid_to_idx, build_visible},
+    search::{Query, matches, parse},
+    tree::{TreeNode, build_filtered, build_parent_to_children, build_pid_to_idx},
 };
 
 pub struct SignalModal {
@@ -23,12 +23,11 @@ pub struct App {
     pub query_text: String,
     pub query: Query,
     pub paused: bool,
-    pub sort: SortKey,
 
-    pub load_cursor: usize,
-    pub load_view_offset: usize,
-
-    pub filtered_indices: Vec<usize>,
+    /// PIDs of processes that satisfy the current query (pre-closure). Used by
+    /// the status line as the "matched" count and by the tree builder as the
+    /// closure seed.
+    pub matched_pids: HashSet<i32>,
 
     // Two-key chord tracking for `gg`. Reset on any key other than another `g`.
     pub pending_g: bool,
@@ -36,11 +35,10 @@ pub struct App {
     pub tree_visible: Vec<TreeNode>,
     pub tree_cursor: usize,
     pub tree_offset: usize,
-    /// (Arc<Snapshot> ptr as usize, the load-view-selected ProcessId). When this
-    /// matches, no rebuild needed.
-    pub tree_cache_key: Option<(usize, ProcessId)>,
-    /// ProcessId currently under the tree cursor — used to re-anchor the cursor
-    /// across snapshot rebuilds when the load-view selection didn't change.
+    /// (Arc<Snapshot> ptr as usize, query_text). When this matches, no rebuild.
+    pub tree_cache_key: Option<(usize, String)>,
+    /// ProcessId currently under the tree cursor — used to re-anchor across
+    /// rebuilds when the same PID is still visible.
     pub tree_cursor_id: Option<ProcessId>,
 
     pub help_open: bool,
@@ -52,9 +50,8 @@ pub struct App {
 
 pub fn hint_for(focus: Focus) -> &'static str {
     match focus {
-        Focus::Search => "type to filter | Enter→load | Tab→cycle | ?→help",
-        Focus::Load => "j/k move | s sort | space pause | Enter drill | K signal | ?→help",
-        Focus::Tree => "j/k move | Enter drill | Tab→search | ?→help",
+        Focus::Search => "type to filter | Esc reset | Enter→tree | ?→help",
+        Focus::Tree => "j/k | Enter drill | K signal | space pause | Tab→search | ?→help",
     }
 }
 
@@ -64,14 +61,11 @@ pub fn needs_confirm(pid: i32, self_pid: i32) -> bool {
     pid == 1 || pid == self_pid
 }
 
-/// Target precedence: tree-focus uses tree cursor; otherwise load cursor.
-/// Returns (pid, label) where label is "PID <pid>  <cmdline-or-comm>".
+/// Target: the process under the tree cursor (regardless of focus). Returns
+/// (pid, label) where label is "PID <pid>  <cmdline-or-comm>".
 pub fn signal_target(app: &App) -> Option<(i32, String)> {
     let snap = app.latest.as_deref()?;
-    let proc_idx = match app.focus {
-        Focus::Tree => app.tree_visible.get(app.tree_cursor)?.proc_idx,
-        Focus::Search | Focus::Load => *app.filtered_indices.get(app.load_cursor)?,
-    };
+    let proc_idx = app.tree_visible.get(app.tree_cursor)?.proc_idx;
     let p = snap.processes.get(proc_idx)?;
     let cmd = if p.cmdline.is_empty() {
         format!("[{}]", p.name)
@@ -100,10 +94,7 @@ impl App {
             query_text: initial_filter,
             query,
             paused: false,
-            sort: SortKey::Cpu,
-            load_cursor: 0,
-            load_view_offset: 0,
-            filtered_indices: Vec::new(),
+            matched_pids: HashSet::new(),
             pending_g: false,
             tree_visible: Vec::new(),
             tree_cursor: 0,
@@ -121,61 +112,23 @@ impl App {
         self.flash = Some((msg.into(), Instant::now()));
     }
 
+    /// Recompute the matched-PID set from the current query text.
     pub fn refilter(&mut self) {
         self.query = parse(&self.query_text);
+        self.matched_pids.clear();
         let Some(snap) = self.latest.as_deref() else {
-            self.filtered_indices.clear();
-            self.load_cursor = 0;
-            self.load_view_offset = 0;
             return;
         };
-        self.filtered_indices = filter(&self.query, snap, self.sort);
-        if self.hide_kernel_threads {
-            self.filtered_indices
-                .retain(|&i| !snap.processes[i].is_kernel_thread);
-        }
-
-        if let Some(target_pid) = self.query.auto_select_pid
-            && let Some(pos) = self.filtered_indices.iter().position(|&i| {
-                self.latest
-                    .as_deref()
-                    .map(|s| s.processes[i].id.pid == target_pid)
-                    .unwrap_or(false)
-            })
-        {
-            self.load_cursor = pos;
-        } else {
-            let max = self.filtered_indices.len().saturating_sub(1);
-            if self.load_cursor > max {
-                self.load_cursor = max;
-            }
-        }
-        self.adjust_offset_for_scrolloff(usize::MAX);
-    }
-
-    // Keep the cursor within scrolloff of the visible viewport.
-    // `visible_rows` is the number of data rows the load view will render; pass
-    // `usize::MAX` from contexts that don't yet know it (final clamp happens at render).
-    pub fn adjust_offset_for_scrolloff(&mut self, visible_rows: usize) {
-        if self.filtered_indices.is_empty() {
-            self.load_view_offset = 0;
+        if self.query.groups.is_empty() {
             return;
         }
-        let so = SCROLLOFF;
-        if self.load_cursor < self.load_view_offset + so {
-            self.load_view_offset = self.load_cursor.saturating_sub(so);
-        }
-        if visible_rows != usize::MAX
-            && self.load_cursor + so + 1 > self.load_view_offset + visible_rows
-        {
-            self.load_view_offset = (self.load_cursor + so + 1).saturating_sub(visible_rows);
-        }
-        let max_offset = self
-            .filtered_indices
-            .len()
-            .saturating_sub(visible_rows.min(self.filtered_indices.len()));
-        if self.load_view_offset > max_offset {
-            self.load_view_offset = max_offset;
+        for p in &snap.processes {
+            if self.hide_kernel_threads && p.is_kernel_thread {
+                continue;
+            }
+            if matches(&self.query, p) {
+                self.matched_pids.insert(p.id.pid);
+            }
         }
     }
 
@@ -201,12 +154,6 @@ impl App {
         }
     }
 
-    pub fn selected_process_id(&self) -> Option<ProcessId> {
-        let snap = self.latest.as_deref()?;
-        let &idx = self.filtered_indices.get(self.load_cursor)?;
-        snap.processes.get(idx).map(|p| p.id)
-    }
-
     pub fn ensure_tree_built(&mut self) {
         let Some(snap) = self.latest.clone() else {
             self.tree_visible.clear();
@@ -216,25 +163,21 @@ impl App {
             self.tree_cursor_id = None;
             return;
         };
-        let Some(selected_id) = self.selected_process_id() else {
-            self.tree_visible.clear();
-            self.tree_cursor = 0;
-            self.tree_offset = 0;
-            self.tree_cache_key = None;
-            self.tree_cursor_id = None;
-            return;
-        };
 
-        let key = (Arc::as_ptr(&snap) as usize, selected_id);
-        if self.tree_cache_key == Some(key) {
+        let key = (Arc::as_ptr(&snap) as usize, self.query_text.clone());
+        if self.tree_cache_key.as_ref() == Some(&key) {
             return;
         }
 
-        let prev_selected = self.tree_cache_key.map(|(_, s)| s);
-
         let pid_to_idx = build_pid_to_idx(&snap);
         let parent_to_children = build_parent_to_children(&snap);
-        self.tree_visible = build_visible(&snap, &parent_to_children, &pid_to_idx, selected_id);
+        self.tree_visible = build_filtered(
+            &snap,
+            &parent_to_children,
+            &pid_to_idx,
+            &self.matched_pids,
+            self.hide_kernel_threads,
+        );
 
         if self.tree_visible.is_empty() {
             self.tree_cursor = 0;
@@ -244,32 +187,50 @@ impl App {
             return;
         }
 
-        let selection_changed = prev_selected != Some(selected_id);
-        let new_cursor = if selection_changed {
-            self.tree_visible
+        // Preserve cursor by ProcessId when possible; otherwise jump to the
+        // first matched node (or row 0 if none).
+        let new_cursor = if let Some(prev_id) = self.tree_cursor_id
+            && let Some(pos) = self
+                .tree_visible
                 .iter()
-                .position(|n| snap.processes[n.proc_idx].id == selected_id)
-                .unwrap_or(0)
-        } else if let Some(prev_cursor_id) = self.tree_cursor_id {
-            self.tree_visible
-                .iter()
-                .position(|n| snap.processes[n.proc_idx].id == prev_cursor_id)
-                .or_else(|| {
-                    self.tree_visible
-                        .iter()
-                        .position(|n| snap.processes[n.proc_idx].id == selected_id)
-                })
-                .unwrap_or(0)
+                .position(|n| snap.processes[n.proc_idx].id == prev_id)
+        {
+            pos
         } else {
             self.tree_visible
                 .iter()
-                .position(|n| snap.processes[n.proc_idx].id == selected_id)
+                .position(|n| {
+                    self.matched_pids
+                        .contains(&snap.processes[n.proc_idx].id.pid)
+                })
                 .unwrap_or(0)
         };
+
         self.tree_cursor = new_cursor.min(self.tree_visible.len().saturating_sub(1));
         self.tree_cursor_id = Some(snap.processes[self.tree_visible[self.tree_cursor].proc_idx].id);
         self.tree_cache_key = Some(key);
         self.adjust_tree_offset_for_scrolloff(usize::MAX);
+    }
+
+    /// Move the tree cursor to the first matched node (DFS order). If there is
+    /// no matched node visible, leave the cursor where it is.
+    pub fn jump_tree_cursor_to_first_match(&mut self) {
+        let Some(snap) = self.latest.as_deref() else {
+            return;
+        };
+        if self.tree_visible.is_empty() {
+            self.tree_cursor = 0;
+            self.tree_cursor_id = None;
+            return;
+        }
+        if let Some(pos) = self.tree_visible.iter().position(|n| {
+            self.matched_pids
+                .contains(&snap.processes[n.proc_idx].id.pid)
+        }) {
+            self.tree_cursor = pos;
+            self.tree_cursor_id = Some(snap.processes[self.tree_visible[pos].proc_idx].id);
+            self.adjust_tree_offset_for_scrolloff(usize::MAX);
+        }
     }
 }
 
@@ -308,6 +269,7 @@ mod tests {
     }
 
     fn snap() -> Arc<Snapshot> {
+        // 1 → 2, 1 → 3, 3 → 4
         let procs = vec![mk_proc(1, 0), mk_proc(2, 1), mk_proc(3, 1), mk_proc(4, 3)];
         let mut by_id = HashMap::new();
         for (i, p) in procs.iter().enumerate() {
@@ -327,102 +289,92 @@ mod tests {
         })
     }
 
+    fn cursor_pid(app: &App) -> i32 {
+        let s = app.latest.as_deref().unwrap();
+        s.processes[app.tree_visible[app.tree_cursor].proc_idx]
+            .id
+            .pid
+    }
+
     #[test]
-    fn cursor_resets_on_selection_change() {
+    fn tree_cursor_preserved_if_pid_visible() {
         let s = snap();
         let mut app = App::new(String::new(), false);
         app.latest = Some(s.clone());
         app.refilter();
-
-        // First build: load cursor at index 0; depending on sort that resolves to
-        // some process. Force it deterministically by selecting pid 1.
-        let pid1_pos = app
-            .filtered_indices
-            .iter()
-            .position(|&i| s.processes[i].id.pid == 1)
-            .unwrap();
-        app.load_cursor = pid1_pos;
         app.ensure_tree_built();
-        // Tree visible for pid 1 is [1,2,3,4]; cursor lands on pid 1 (position 0).
-        assert_eq!(app.tree_cursor, 0);
-        let cursor_pid = s.processes[app.tree_visible[app.tree_cursor].proc_idx]
-            .id
-            .pid;
-        assert_eq!(cursor_pid, 1);
-
-        // Move user's tree cursor to pid 4 (last visible row).
-        let pid4_pos = app
+        // Move cursor to pid 4.
+        let pos4 = app
             .tree_visible
             .iter()
             .position(|n| s.processes[n.proc_idx].id.pid == 4)
             .unwrap();
-        app.tree_cursor = pid4_pos;
-        app.tree_cursor_id = Some(s.processes[app.tree_visible[app.tree_cursor].proc_idx].id);
+        app.tree_cursor = pos4;
+        app.tree_cursor_id = Some(s.processes[app.tree_visible[pos4].proc_idx].id);
 
-        // Now change load selection to pid 3 — tree cursor should jump to the
-        // newly selected node (pid 3), not stay on pid 4.
-        let pid3_pos = app
-            .filtered_indices
-            .iter()
-            .position(|&i| s.processes[i].id.pid == 3)
-            .unwrap();
-        app.load_cursor = pid3_pos;
-        app.ensure_tree_built();
-        let cursor_pid_after = s.processes[app.tree_visible[app.tree_cursor].proc_idx]
-            .id
-            .pid;
-        assert_eq!(cursor_pid_after, 3);
-    }
-
-    #[test]
-    fn cursor_preserved_across_snapshot_when_selection_unchanged() {
-        let s1 = snap();
-        let mut app = App::new(String::new(), false);
-        app.latest = Some(s1.clone());
-        app.refilter();
-        let pid1_pos = app
-            .filtered_indices
-            .iter()
-            .position(|&i| s1.processes[i].id.pid == 1)
-            .unwrap();
-        app.load_cursor = pid1_pos;
-        app.ensure_tree_built();
-        // Move tree cursor onto pid 3.
-        let pid3_idx = app
-            .tree_visible
-            .iter()
-            .position(|n| s1.processes[n.proc_idx].id.pid == 3)
-            .unwrap();
-        app.tree_cursor = pid3_idx;
-        app.tree_cursor_id = Some(s1.processes[app.tree_visible[app.tree_cursor].proc_idx].id);
-
-        // New snapshot, same shape — re-anchor by id.
+        // New snapshot, same shape — cursor PID still visible, stays on pid 4.
         let s2 = snap();
         app.latest = Some(s2.clone());
         app.refilter();
-        let pid1_pos2 = app
-            .filtered_indices
-            .iter()
-            .position(|&i| s2.processes[i].id.pid == 1)
-            .unwrap();
-        app.load_cursor = pid1_pos2;
         app.ensure_tree_built();
-        let cursor_pid = s2.processes[app.tree_visible[app.tree_cursor].proc_idx]
-            .id
-            .pid;
-        assert_eq!(cursor_pid, 3);
+        assert_eq!(cursor_pid(&app), 4);
+    }
+
+    #[test]
+    fn tree_cursor_jumps_to_first_match_when_old_pid_pruned() {
+        let s = snap();
+        let mut app = App::new(String::new(), false);
+        app.latest = Some(s.clone());
+        app.refilter();
+        app.ensure_tree_built();
+        // Park cursor on pid 2.
+        let pos2 = app
+            .tree_visible
+            .iter()
+            .position(|n| s.processes[n.proc_idx].id.pid == 2)
+            .unwrap();
+        app.tree_cursor = pos2;
+        app.tree_cursor_id = Some(s.processes[app.tree_visible[pos2].proc_idx].id);
+
+        // Filter to pid:4 → pid 2 gets pruned from the visible tree.
+        app.query_text = "pid:4".into();
+        app.refilter();
+        app.ensure_tree_built();
+        // Visible should be {1, 3, 4}; cursor jumps to first match (pid 4).
+        assert_eq!(cursor_pid(&app), 4);
+    }
+
+    #[test]
+    fn signal_target_uses_tree_cursor_regardless_of_focus() {
+        let s = snap();
+        let mut app = App::new(String::new(), false);
+        app.latest = Some(s.clone());
+        app.refilter();
+        app.ensure_tree_built();
+        // Move cursor to pid 4.
+        let pos4 = app
+            .tree_visible
+            .iter()
+            .position(|n| s.processes[n.proc_idx].id.pid == 4)
+            .unwrap();
+        app.tree_cursor = pos4;
+        app.tree_cursor_id = Some(s.processes[app.tree_visible[pos4].proc_idx].id);
+
+        app.focus = Focus::Search;
+        let (pid_s, _) = signal_target(&app).unwrap();
+        assert_eq!(pid_s, 4);
+
+        app.focus = Focus::Tree;
+        let (pid_t, _) = signal_target(&app).unwrap();
+        assert_eq!(pid_t, 4);
     }
 
     #[test]
     fn hint_for_each_focus() {
         let s = hint_for(Focus::Search);
-        let l = hint_for(Focus::Load);
         let t = hint_for(Focus::Tree);
         assert!(!s.is_empty());
-        assert!(!l.is_empty());
         assert!(!t.is_empty());
-        assert_ne!(s, l);
-        assert_ne!(l, t);
         assert_ne!(s, t);
     }
 
@@ -463,63 +415,6 @@ mod tests {
         assert!(!needs_confirm(123, 9999));
     }
 
-    fn pid_at_load_cursor(app: &App) -> i32 {
-        let s = app.latest.as_deref().unwrap();
-        s.processes[app.filtered_indices[app.load_cursor]].id.pid
-    }
-
-    #[test]
-    fn signal_target_uses_load_cursor_when_focus_search() {
-        let s = snap();
-        let mut app = App::new(String::new(), false);
-        app.latest = Some(s.clone());
-        app.refilter();
-        app.load_cursor = 0;
-        app.focus = Focus::Search;
-        let expected_pid = pid_at_load_cursor(&app);
-        let (pid, label) = signal_target(&app).unwrap();
-        assert_eq!(pid, expected_pid);
-        assert!(label.starts_with(&format!("PID {expected_pid}")));
-    }
-
-    #[test]
-    fn signal_target_uses_load_cursor_when_focus_load() {
-        let s = snap();
-        let mut app = App::new(String::new(), false);
-        app.latest = Some(s.clone());
-        app.refilter();
-        app.load_cursor = 1;
-        app.focus = Focus::Load;
-        let expected_pid = pid_at_load_cursor(&app);
-        let (pid, _) = signal_target(&app).unwrap();
-        assert_eq!(pid, expected_pid);
-    }
-
-    #[test]
-    fn signal_target_uses_tree_cursor_when_focus_tree() {
-        let s = snap();
-        let mut app = App::new(String::new(), false);
-        app.latest = Some(s.clone());
-        app.refilter();
-        let pid1_pos = app
-            .filtered_indices
-            .iter()
-            .position(|&i| s.processes[i].id.pid == 1)
-            .unwrap();
-        app.load_cursor = pid1_pos;
-        app.ensure_tree_built();
-        // Move tree cursor to pid 4 explicitly.
-        let pid4_pos = app
-            .tree_visible
-            .iter()
-            .position(|n| s.processes[n.proc_idx].id.pid == 4)
-            .unwrap();
-        app.tree_cursor = pid4_pos;
-        app.focus = Focus::Tree;
-        let (pid, _) = signal_target(&app).unwrap();
-        assert_eq!(pid, 4);
-    }
-
     #[test]
     fn signal_target_none_without_snapshot() {
         let app = App::new(String::new(), false);
@@ -550,23 +445,31 @@ mod tests {
     }
 
     #[test]
-    fn no_kernel_threads_excludes_kernel_threads() {
+    fn hide_kernel_threads_excluded_from_visible_tree() {
         let s = snap_with_kernel_threads();
         let mut app = App::new(String::new(), true);
         app.latest = Some(s.clone());
         app.refilter();
-        assert_eq!(app.filtered_indices.len(), 2);
-        for &i in &app.filtered_indices {
-            assert!(!s.processes[i].is_kernel_thread);
-        }
+        app.ensure_tree_built();
+        let visible_pids: Vec<i32> = app
+            .tree_visible
+            .iter()
+            .map(|n| s.processes[n.proc_idx].id.pid)
+            .collect();
+        // Empty matched + hide_kernel_threads → kthreads stripped from visible.
+        assert!(!visible_pids.contains(&2));
+        assert!(!visible_pids.contains(&4));
+        assert!(visible_pids.contains(&1));
+        assert!(visible_pids.contains(&3));
     }
 
     #[test]
-    fn kernel_threads_included_when_flag_off() {
+    fn kernel_threads_visible_when_flag_off() {
         let s = snap_with_kernel_threads();
         let mut app = App::new(String::new(), false);
         app.latest = Some(s.clone());
         app.refilter();
-        assert_eq!(app.filtered_indices.len(), 4);
+        app.ensure_tree_built();
+        assert_eq!(app.tree_visible.len(), 4);
     }
 }

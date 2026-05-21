@@ -8,11 +8,10 @@ Early development; see [PLAN.md](PLAN.md) for roadmap.
 
 ## Features
 
-- **Vim-style three-pane TUI**: search box, load-sorted process list, context-sensitive process tree.
+- **Vim-style two-pane TUI**: search box on top, process tree below. The tree filters itself directly off the query — no intermediate sorted list.
 - **Substring search DSL**: `pid:`, `ppid:`, `user:`, `name:`, `cmd:`, `state:` prefixes; bare terms search across name+cmdline+user. Space-separated terms within a group are AND-ed; a comma separates OR-groups.
-- **Sort modes**: CPU%, RSS, TIME+, AGE — cycle with `s`.
-- **Process tree**: spine of ancestors + DFS subtree of the load-view selection. `Enter` drills into a PID; tree cursor navigates with `j`/`k`/`gg`/`G`/Ctrl-d/Ctrl-u.
-- **Signal sending**: press `K` to open the signal modal (TERM/KILL/HUP/INT/USR1/USR2/STOP/CONT). Confirms PID 1 and self-signal.
+- **Match-driven tree**: every matching process is shown together with its full parent chain (root → match) and its complete subtree. Multiple disjoint matches become separate roots; empty query shows the full forest. Tree cursor navigates with `j`/`k`/`gg`/`G`/Ctrl-d/Ctrl-u; `Enter` drills into a PID.
+- **Signal sending**: press `K` in the tree to open the signal modal (TERM/KILL/HUP/INT/USR1/USR2/STOP/CONT). Confirms PID 1 and self-signal.
 - **Pause** sampling with `space`; resume with `space`.
 - **CLI flags**: `--filter <expr>` pre-populates the search box; `--interval <secs>` overrides sample interval; `--no-kernel-threads` hides kernel threads.
 - **Cross-platform**: Linux (`procfs`) + macOS (`libproc`/`sysctl`).

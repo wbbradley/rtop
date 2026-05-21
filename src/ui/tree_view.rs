@@ -403,7 +403,6 @@ fn build_gutter(node: &TreeNode) -> String {
         return s;
     }
     match node.gutter_kind {
-        GutterKind::Spine => s.push_str("└─ "),
         GutterKind::Branch => s.push_str("├─ "),
         GutterKind::Leaf => s.push_str("└─ "),
     }

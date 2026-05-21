@@ -5,7 +5,11 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Changed
-- **Breaking**: `pid:<X>` now filters the load view to processes whose PID equals `X` (multiple values via OR-groups: `pid:42, pid:7`). Previously `pid:` was special-cased to highlight without filtering, so `Enter`-drill on a row left the entire list visible. The auto-cursor-position behavior is unchanged (cursor lands on the first matching PID). Scripts using `--filter pid:<X>` to keep all rows visible will see the list narrow to that PID.
+- **Breaking**: dropped the load pane. The TUI is now two panes — search box on top, tree below — and the tree filters itself directly off the search query. For every matching process the tree shows its full parent chain (root → match) plus its complete subtree; multiple matches across the forest become separate roots. Empty query → full forest; no matches → empty tree.
+- **Breaking**: removed the sort cycle (`s` key) and its `[sort: …]` status indicator. Tree order is parent-chain + DFS, with sibling order by PID.
+- **Breaking**: `Esc` in the search box now unconditionally clears the query (previously it only cleared when the query was non-empty).
+- **Breaking**: `pid:<X>` now filters the tree to the chain + descendants of PIDs matching `X` (multiple values via OR-groups: `pid:42, pid:7`). The tree cursor auto-positions on the first match.
+- Focus cycles between just `search` and `tree`. `Tab` / `Shift-Tab` flip between them. `Ctrl-n` / `Ctrl-p` in the search box step the tree cursor without leaving search focus. `Enter` in search jumps focus to the tree and parks the cursor on the first match.
 
 ## [0.1.5] - 2026-05-19
 

@@ -193,3 +193,24 @@ Eliminated the special case that made `pid:<X>` highlight-without-filter, so the
 - `auto_select_pid` cursor-positioning in `App::refilter()` works as-is; no `app/state.rs` changes. Help modal didn't mention `pid:` semantics; no change.
 - `chk` clean; `cargo test` green (101 passed, +3 vs. prior 99 — the prior count grew with the renamed/added tests).
 
+
+## Drop the load pane; tree shows union of matches' ancestors + descendants
+
+Re-centered the UI on the search box + tree pane. The load pane was a redundant intermediary; the tree now filters itself directly off the query, and the load pane is gone.
+
+- `src/app/event.rs`: removed `Focus::Load` and the entire `SortKey` enum + tests.
+- `src/app/state.rs`: replaced `load_cursor`, `load_view_offset`, `sort`, `filtered_indices`, and the load-cursor-keyed `tree_cache_key` with `matched_pids: HashSet<i32>` and a `(snapshot_ptr, query_text)` cache key. `refilter()` now just populates `matched_pids`. `signal_target` always reads the tree cursor. New `jump_tree_cursor_to_first_match()` helper for the search-Enter handoff. Replaced cursor-anchoring tests with `tree_cursor_preserved_if_pid_visible` / `tree_cursor_jumps_to_first_match_when_old_pid_pruned`.
+- `src/tree.rs`: replaced `build_visible(snap, p2c, pid_to_idx, selected)` with `build_filtered(snap, p2c, pid_to_idx, matched, hide_kernel_threads)`. Algorithm: closure over `matched` adding all ancestors (parent chain) and all descendants (BFS); kthread PIDs masked out when `hide_kernel_threads`. Roots = kept procs whose parent isn't kept; sorted by PID. Recursive DFS emits `TreeNode`s with `is_last_child` / `ancestors_last` computed against the visible-kept siblings (so `└─` vs `├─` is correct after pruning). Dropped `GutterKind::Spine` — only `Branch` and `Leaf` remain.
+- `src/app.rs`: removed `handle_load_key`, `current_selected_pid`, the load `move_cursor` / `half_page` family. `handle_search_key`: `Tab` and `BackTab` both jump to `Focus::Tree`; `Enter` focuses the tree and jumps the cursor to the first match; `Ctrl-n` / `Ctrl-p` drive the tree cursor; `Esc` unconditionally clears the query. `handle_tree_key`: added `space` (pause), `Esc`/`Tab`/`BackTab` all return to Search, half-page uses `TREE_HALF_PAGE`.
+- `src/search/filter.rs`: extracted `pub fn matches(query, p) -> bool` (the per-process predicate). Deleted the no-longer-used `pub fn filter(query, snap) -> Vec<usize>` and the SortKey-keyed `compare` / `sort_indices`. Added unit tests for each prefixed term type, bare-term substring, AND-within-OR, and comma-OR.
+- `src/ui.rs`: layout is now `SEARCH_BOX_HEIGHT` / `Min(0)` / `STATUS_LINE_HEIGHT`. The pre-snapshot "loading…" placeholder now renders inside the tree-pane block. Dropped `pub mod load_view`.
+- `src/ui/load_view.rs`: deleted.
+- `src/ui/tree_view.rs`: dropped the `GutterKind::Spine` arm in `build_gutter`; otherwise unchanged (iterates the new `tree_visible`).
+- `src/ui/status_line.rs`: dropped `[sort: cpu]`. `<matched>/<total> procs` uses `matched_pids.len()` for the matched count.
+- `src/ui/help_modal.rs`: rewrote contents: `[ search ]` / `[ tree ]` / `[ any ]` sections only. Documented the new Esc semantics, Enter handoff, `K`, `space`, and `/` in the tree.
+- `src/format.rs`: deleted `age()`, `time_plus()`, and the `SECS_PER_*` constants — they were only used by the removed load pane.
+- `src/consts.rs`: removed `LOAD_VIEW_VISIBLE_ROWS` and `LOAD_VIEW_HEIGHT`. Added `TREE_HALF_PAGE: usize = 10`.
+- `PLAN.md` Architecture Reference: Layout collapsed from 3 panes to 2; Data flow updated to describe the chain+subtree closure; Key bindings table rewritten; Constants discipline lists `TREE_HALF_PAGE` and drops the load constants. `pid:` DSL bullet updated.
+- `README.md`: rewrote Features to advertise the two-pane match-driven tree model.
+- `CHANGELOG.md` `[Unreleased]`: added `### Changed` entries flagging the breaking removals (load pane, sort cycle, Esc semantics) and the focus-cycle change.
+- `chk` clean; `cargo test` green (80 passed; older load-pane tests retired).

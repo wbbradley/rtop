@@ -9,20 +9,19 @@ Self-contained context so a developer picking up any phase has what they need.
 ### Layout (top → bottom)
 
 1. **Search box** (3 rows incl. border) — single-line, scrolls horizontally. Initial focus.
-2. **Load view** (~7 rows: header + `LOAD_VIEW_VISIBLE_ROWS` data rows + border) — sorted-by-load list.
-3. **Tree pane** (remainder) — spine + subtree of the load view's selected process.
-4. **Status line** (1 row, no border): `[focus] [N/M procs] [sort: cpu] [paused?]   [load: x x x  mem: x/y GiB]   [error|hint]`.
+2. **Tree pane** (remainder) — visible forest computed from the search query.
+3. **Status line** (1 row, no border): `[focus] [N/M procs] [paused?]   [load: x x x  mem: x/y GiB]   [error|hint]`.
 
 ### Data flow
 
-Search box state is canonical. Load view filters/sorts off it. Tree shows spine + subtree of the load view's currently-selected process.
+Search box state is canonical. The tree pane shows the closure of the matched-PID set: every match plus its full parent chain (root → match) and complete descendant subtree. Empty query → full forest.
 
 ### Search DSL
 
 - Prefixed terms (case-insensitive substring): `pid:`, `ppid:`, `user:`, `name:`, `cmd:`, `state:`.
 - Bare terms: case-insensitive substring match against `name + " " + cmdline + " " + user`.
 - Space-separated terms within an OR-group = AND. Comma separates OR-groups (adjacent to whitespace or token boundary; commas inside a token are literal). No negation in v1.
-- `pid:X` filters by exact PID equality; the cursor auto-positions on the first matching row.
+- `pid:X` filters by exact PID equality; the tree cursor auto-positions on the first matching node.
 
 ### Refresh & threading
 
@@ -93,8 +92,8 @@ src/
 No magic numbers anywhere. All tunables live in `consts.rs`:
 
 - `SAMPLE_INTERVAL: Duration` (5s)
-- `LOAD_VIEW_VISIBLE_ROWS: usize` (4)
 - `SCROLLOFF: usize` (3)
+- `TREE_HALF_PAGE: usize` (10)
 - `MIN_COLS: u16` (80), `MIN_ROWS: u16` (24)
 - `ERROR_FLASH_DURATION: Duration` (3s)
 - `CPU_WARN_PCT: f32` (50.0), `CPU_DANGER_PCT: f32` (80.0)
@@ -105,21 +104,17 @@ No magic numbers anywhere. All tunables live in `consts.rs`:
 |---|---|---|
 | any | `Ctrl-C` | quit |
 | any | `?` | open help modal |
-| any | `Tab` / `Shift-Tab` | cycle focus forward/backward (search → load → tree → search) |
-| any non-search | `/` | jump focus to search and clear it |
-| any non-search | `Esc` | return focus to search |
-| search | `Esc` | clear search if non-empty; otherwise no-op |
-| search | `Ctrl-n` / `Ctrl-p` | move load view selection without leaving search focus |
-| search | `Enter` | select first match (move focus to load view) |
-| load view | `j`/`k`/`gg`/`G` | navigate selection; scrolloff=`SCROLLOFF` |
-| load view | `Ctrl-d`/`Ctrl-u` | half-page selection move |
-| load view | `Enter` | drill: commit `pid:<X>` to search |
-| load view | `s` | cycle sort: CPU → RSS → TIME+ → AGE → CPU |
-| load view | `K` | open signal modal |
-| load view | `space` | toggle sampling pause |
+| tree | `Tab` / `Shift-Tab` / `Esc` | focus search |
+| search | `Tab` / `Shift-Tab` | focus tree |
+| search | `Esc` | clear query (stay in search) |
+| search | `Ctrl-n` / `Ctrl-p` | move tree cursor without leaving search |
+| search | `Enter` | focus tree, jump cursor to first match |
 | tree | `j`/`k`/`gg`/`G` | navigate cursor (DFS order); scrolloff=`SCROLLOFF` |
-| tree | `Ctrl-d`/`Ctrl-u` | half-page viewport scroll |
+| tree | `Ctrl-d`/`Ctrl-u` | half-page viewport scroll (`TREE_HALF_PAGE`) |
 | tree | `Enter` | commit `pid:<X>` to search (drill) |
+| tree | `K` | open signal modal |
+| tree | `space` | toggle sampling pause |
+| tree | `/` | clear query and focus search |
 | signal modal | `j`/`k` | pick signal |
 | signal modal | `Enter` | send signal |
 | signal modal | `Esc` | cancel |
@@ -157,8 +152,3 @@ No magic numbers anywhere. All tunables live in `consts.rs`:
 ### Out of v1 scope
 
 Threads, renice, kill-tree, multi-select, `cwd:` filter, search negation, manual h/l fold ops in tree, runtime pane resize, config file, theming.
-
----
-
-## Next Up
-

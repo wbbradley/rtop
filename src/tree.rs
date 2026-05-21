@@ -1,10 +1,9 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 
-use crate::process::{ProcessId, Snapshot};
+use crate::process::Snapshot;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GutterKind {
-    Spine,
     Branch,
     Leaf,
 }
@@ -17,8 +16,8 @@ pub struct TreeNode {
     #[allow(dead_code)]
     pub is_last_child: bool,
     /// One bool per ancestor column (length == depth). True ⇒ that ancestor was
-    /// the last child at its level (render `   `); false ⇒ render `│  `. For
-    /// Spine nodes this is all-true (no vertical bars between spine entries).
+    /// the last child at its level (render `   `); false ⇒ render `│  `. The
+    /// flags refer to last-among-visible-kept-siblings, not raw children.
     pub ancestors_last: Vec<bool>,
 }
 
@@ -41,113 +40,175 @@ pub fn build_parent_to_children(snap: &Snapshot) -> HashMap<i32, Vec<usize>> {
     m
 }
 
-pub fn build_visible(
+/// Compute the visible forest.
+///
+/// - If `matched` is empty, the visible set is every process (minus kernel
+///   threads when `hide_kernel_threads`).
+/// - Otherwise, the visible set is the closure of `matched` extended with the
+///   parent chain (root → match) and the complete subtree below each match.
+///   When `hide_kernel_threads`, kernel-thread PIDs are excluded from `matched`
+///   *and* skipped during the closure walk so they never appear in the result.
+pub fn build_filtered(
     snap: &Snapshot,
     parent_to_children: &HashMap<i32, Vec<usize>>,
     pid_to_idx: &HashMap<i32, usize>,
-    selected: ProcessId,
+    matched: &HashSet<i32>,
+    hide_kernel_threads: bool,
 ) -> Vec<TreeNode> {
-    let Some(&selected_idx) = snap.by_id.get(&selected) else {
-        return Vec::new();
-    };
+    let allowed = |idx: usize| !hide_kernel_threads || !snap.processes[idx].is_kernel_thread;
 
-    // Walk the parent chain.
-    let mut chain: Vec<usize> = vec![selected_idx];
-    let mut cur_idx = selected_idx;
-    let mut seen: std::collections::HashSet<usize> = std::collections::HashSet::new();
-    seen.insert(cur_idx);
-    loop {
-        let p = &snap.processes[cur_idx];
-        if p.ppid == 0 {
-            break;
+    let mut keep: HashSet<i32> = HashSet::with_capacity(snap.processes.len());
+
+    if matched.is_empty() {
+        for (i, p) in snap.processes.iter().enumerate() {
+            if allowed(i) {
+                keep.insert(p.id.pid);
+            }
         }
-        let Some(&parent_idx) = pid_to_idx.get(&p.ppid) else {
-            break;
-        };
-        if parent_idx == cur_idx {
-            break;
-        }
-        if !seen.insert(parent_idx) {
-            break;
-        }
-        chain.push(parent_idx);
-        cur_idx = parent_idx;
-    }
-    chain.reverse();
+    } else {
+        let seeds: Vec<i32> = matched
+            .iter()
+            .copied()
+            .filter(|pid| pid_to_idx.get(pid).is_some_and(|&idx| allowed(idx)))
+            .collect();
 
-    let mut out: Vec<TreeNode> = Vec::with_capacity(chain.len() + 8);
-    for (depth, &idx) in chain.iter().enumerate() {
-        out.push(TreeNode {
-            proc_idx: idx,
-            depth,
-            gutter_kind: GutterKind::Spine,
-            is_last_child: true,
-            ancestors_last: vec![true; depth],
-        });
-    }
-
-    // DFS over selected's subtree.
-    // Stack frames: (proc_idx, depth, is_last_child, ancestors_last_clone) — but
-    // we'll iterate children manually rather than push/pop frames.
-    let base_depth = chain.len();
-    let mut ancestors_last: Vec<bool> = vec![true; base_depth];
-
-    fn dfs(
-        snap: &Snapshot,
-        parent_to_children: &HashMap<i32, Vec<usize>>,
-        node_idx: usize,
-        depth: usize,
-        ancestors_last: &mut Vec<bool>,
-        out: &mut Vec<TreeNode>,
-    ) {
-        let pid = snap.processes[node_idx].id.pid;
-        let Some(children) = parent_to_children.get(&pid) else {
-            return;
-        };
-        let n = children.len();
-        for (i, &child_idx) in children.iter().enumerate() {
-            let is_last = i + 1 == n;
-            let kind = if is_last {
-                GutterKind::Leaf
-            } else {
-                GutterKind::Branch
+        for &pid in &seeds {
+            let Some(&start_idx) = pid_to_idx.get(&pid) else {
+                continue;
             };
-            out.push(TreeNode {
-                proc_idx: child_idx,
-                depth,
-                gutter_kind: kind,
-                is_last_child: is_last,
-                ancestors_last: ancestors_last.clone(),
-            });
-            ancestors_last.push(is_last);
-            dfs(
-                snap,
-                parent_to_children,
-                child_idx,
-                depth + 1,
-                ancestors_last,
-                out,
-            );
-            ancestors_last.pop();
+            let mut cur = start_idx;
+            loop {
+                if !allowed(cur) {
+                    break;
+                }
+                let cur_pid = snap.processes[cur].id.pid;
+                if !keep.insert(cur_pid) {
+                    break;
+                }
+                let ppid = snap.processes[cur].ppid;
+                if ppid == 0 {
+                    break;
+                }
+                let Some(&parent_idx) = pid_to_idx.get(&ppid) else {
+                    break;
+                };
+                if parent_idx == cur {
+                    break;
+                }
+                cur = parent_idx;
+            }
+        }
+
+        let mut queue: VecDeque<i32> = seeds.iter().copied().collect();
+        while let Some(pid) = queue.pop_front() {
+            let Some(children) = parent_to_children.get(&pid) else {
+                continue;
+            };
+            for &child_idx in children {
+                if !allowed(child_idx) {
+                    continue;
+                }
+                let child_pid = snap.processes[child_idx].id.pid;
+                if keep.insert(child_pid) {
+                    queue.push_back(child_pid);
+                }
+            }
         }
     }
 
-    dfs(
-        snap,
-        parent_to_children,
-        selected_idx,
-        base_depth,
-        &mut ancestors_last,
-        &mut out,
-    );
+    if keep.is_empty() {
+        return Vec::new();
+    }
+
+    let mut roots: Vec<usize> = Vec::new();
+    for (i, p) in snap.processes.iter().enumerate() {
+        if !keep.contains(&p.id.pid) {
+            continue;
+        }
+        let parent_kept = p.ppid != 0 && pid_to_idx.contains_key(&p.ppid) && keep.contains(&p.ppid);
+        if !parent_kept {
+            roots.push(i);
+        }
+    }
+    roots.sort_by_key(|&i| snap.processes[i].id.pid);
+
+    let mut out: Vec<TreeNode> = Vec::new();
+    let n_roots = roots.len();
+    let mut ancestors_last: Vec<bool> = Vec::new();
+    for (root_pos, &root_idx) in roots.iter().enumerate() {
+        let is_last = root_pos + 1 == n_roots;
+        out.push(TreeNode {
+            proc_idx: root_idx,
+            depth: 0,
+            gutter_kind: GutterKind::Leaf,
+            is_last_child: is_last,
+            ancestors_last: Vec::new(),
+        });
+        dfs(
+            snap,
+            parent_to_children,
+            &keep,
+            root_idx,
+            1,
+            &mut ancestors_last,
+            &mut out,
+        );
+    }
 
     out
+}
+
+fn dfs(
+    snap: &Snapshot,
+    parent_to_children: &HashMap<i32, Vec<usize>>,
+    keep: &HashSet<i32>,
+    node_idx: usize,
+    depth: usize,
+    ancestors_last: &mut Vec<bool>,
+    out: &mut Vec<TreeNode>,
+) {
+    let pid = snap.processes[node_idx].id.pid;
+    let Some(children) = parent_to_children.get(&pid) else {
+        return;
+    };
+    let visible: Vec<usize> = children
+        .iter()
+        .copied()
+        .filter(|&c| keep.contains(&snap.processes[c].id.pid))
+        .collect();
+    let n = visible.len();
+    for (i, &child_idx) in visible.iter().enumerate() {
+        let is_last = i + 1 == n;
+        let kind = if is_last {
+            GutterKind::Leaf
+        } else {
+            GutterKind::Branch
+        };
+        out.push(TreeNode {
+            proc_idx: child_idx,
+            depth,
+            gutter_kind: kind,
+            is_last_child: is_last,
+            ancestors_last: ancestors_last.clone(),
+        });
+        ancestors_last.push(is_last);
+        dfs(
+            snap,
+            parent_to_children,
+            keep,
+            child_idx,
+            depth + 1,
+            ancestors_last,
+            out,
+        );
+        ancestors_last.pop();
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use std::{
-        collections::HashMap,
+        collections::{HashMap, HashSet},
         time::{Duration, Instant},
     };
 
@@ -207,92 +268,98 @@ mod tests {
         snap.processes[n.proc_idx].id.pid
     }
 
-    fn id_for(snap: &Snapshot, pid: i32) -> ProcessId {
-        snap.processes.iter().find(|p| p.id.pid == pid).unwrap().id
+    fn pids_in(snap: &Snapshot, v: &[TreeNode]) -> Vec<i32> {
+        v.iter().map(|n| pid_at(snap, n)).collect()
+    }
+
+    fn build(snap: &Snapshot, matched: &[i32], hide_kernel_threads: bool) -> Vec<TreeNode> {
+        let p2c = build_parent_to_children(snap);
+        let pid_to_idx = build_pid_to_idx(snap);
+        let set: HashSet<i32> = matched.iter().copied().collect();
+        build_filtered(snap, &p2c, &pid_to_idx, &set, hide_kernel_threads)
     }
 
     #[test]
-    fn build_visible_root_selected() {
+    fn build_filtered_empty_matched_shows_all() {
         let snap = fixture_simple();
-        let p2c = build_parent_to_children(&snap);
-        let pid_to_idx = build_pid_to_idx(&snap);
-        let v = build_visible(&snap, &p2c, &pid_to_idx, id_for(&snap, 1));
-        let pids: Vec<i32> = v.iter().map(|n| pid_at(&snap, n)).collect();
+        let v = build(&snap, &[], false);
+        let pids = pids_in(&snap, &v);
         assert_eq!(pids, vec![1, 2, 3, 4]);
-        let kinds: Vec<GutterKind> = v.iter().map(|n| n.gutter_kind).collect();
-        assert_eq!(
-            kinds,
-            vec![
-                GutterKind::Spine,
-                GutterKind::Branch,
-                GutterKind::Leaf,
-                GutterKind::Leaf,
-            ]
-        );
         let depths: Vec<usize> = v.iter().map(|n| n.depth).collect();
         assert_eq!(depths, vec![0, 1, 1, 2]);
     }
 
     #[test]
-    fn build_visible_mid_selected() {
+    fn build_filtered_single_leaf_match_shows_chain_only() {
         let snap = fixture_simple();
-        let p2c = build_parent_to_children(&snap);
-        let pid_to_idx = build_pid_to_idx(&snap);
-        let v = build_visible(&snap, &p2c, &pid_to_idx, id_for(&snap, 3));
-        let pids: Vec<i32> = v.iter().map(|n| pid_at(&snap, n)).collect();
+        let v = build(&snap, &[4], false);
+        // Match on 4 → keep = {1, 3, 4}. 2 (sibling of 3, not on chain) hidden.
+        let pids = pids_in(&snap, &v);
         assert_eq!(pids, vec![1, 3, 4]);
-        let kinds: Vec<GutterKind> = v.iter().map(|n| n.gutter_kind).collect();
-        assert_eq!(
-            kinds,
-            vec![GutterKind::Spine, GutterKind::Spine, GutterKind::Leaf]
-        );
-        let depths: Vec<usize> = v.iter().map(|n| n.depth).collect();
-        assert_eq!(depths, vec![0, 1, 2]);
+        // 3 is the only visible child of 1 → is_last_child=true, Leaf gutter.
+        let three = v.iter().find(|n| pid_at(&snap, n) == 3).unwrap();
+        assert!(three.is_last_child);
+        assert_eq!(three.gutter_kind, GutterKind::Leaf);
+        // 4 is the only visible child of 3.
+        let four = v.iter().find(|n| pid_at(&snap, n) == 4).unwrap();
+        assert!(four.is_last_child);
+        assert_eq!(four.gutter_kind, GutterKind::Leaf);
+        assert_eq!(four.ancestors_last, vec![true]);
     }
 
     #[test]
-    fn build_visible_leaf_selected() {
+    fn build_filtered_internal_match_includes_subtree() {
         let snap = fixture_simple();
-        let p2c = build_parent_to_children(&snap);
-        let pid_to_idx = build_pid_to_idx(&snap);
-        let v = build_visible(&snap, &p2c, &pid_to_idx, id_for(&snap, 4));
-        let pids: Vec<i32> = v.iter().map(|n| pid_at(&snap, n)).collect();
+        let v = build(&snap, &[3], false);
+        // Match on 3 → keep = ancestors(3) ∪ {3} ∪ descendants(3) = {1, 3, 4}.
+        let pids = pids_in(&snap, &v);
         assert_eq!(pids, vec![1, 3, 4]);
-        let kinds: Vec<GutterKind> = v.iter().map(|n| n.gutter_kind).collect();
-        assert_eq!(
-            kinds,
-            vec![GutterKind::Spine, GutterKind::Spine, GutterKind::Spine]
-        );
-        let depths: Vec<usize> = v.iter().map(|n| n.depth).collect();
-        assert_eq!(depths, vec![0, 1, 2]);
     }
 
     #[test]
-    fn build_visible_missing_selection() {
+    fn build_filtered_disjoint_matches_yield_two_roots() {
+        // Forest:
+        //   1 (ppid=0)
+        //     ├── 10
+        //     └── 11
+        //   20 (ppid=0)
+        //     └── 30
+        let snap = snap_from(vec![
+            mk_proc(1, 0),
+            mk_proc(10, 1),
+            mk_proc(11, 1),
+            mk_proc(20, 0),
+            mk_proc(30, 20),
+        ]);
+        // Match 10 and 30: keep = {1, 10, 20, 30}. 11 hidden.
+        let v = build(&snap, &[10, 30], false);
+        let pids = pids_in(&snap, &v);
+        assert_eq!(pids, vec![1, 10, 20, 30]);
+
+        // Both roots have depth 0.
+        let depths: Vec<usize> = v.iter().map(|n| n.depth).collect();
+        assert_eq!(depths, vec![0, 1, 0, 1]);
+
+        // 10 is the only visible child of 1 → Leaf, is_last=true.
+        let ten = v.iter().find(|n| pid_at(&snap, n) == 10).unwrap();
+        assert_eq!(ten.gutter_kind, GutterKind::Leaf);
+        assert!(ten.is_last_child);
+    }
+
+    #[test]
+    fn build_filtered_no_matches_yields_empty() {
         let snap = fixture_simple();
-        let p2c = build_parent_to_children(&snap);
-        let pid_to_idx = build_pid_to_idx(&snap);
-        let bogus = ProcessId {
-            pid: 9999,
-            start_time: 9999,
-        };
-        let v = build_visible(&snap, &p2c, &pid_to_idx, bogus);
+        let v = build(&snap, &[9999], false);
         assert!(v.is_empty());
     }
 
     #[test]
-    fn ancestors_last_flags_branch() {
-        // root(1)
-        //   ├─ A(10)         non-last
-        //   │    ├─ C(20)    non-last child of A
-        //   │    └─ D(21)    last child of A
-        //   └─ B(11)         last
-        // Select root → DFS lays out 1, A, C, D, B
-        // D's ancestors_last == [true (col 0 ← root has no parent column? actually
-        //   the column at depth 0 references root, and ancestors_last[0] is whether
-        //   root was the last child at its level. Root is the only child of pseudo-
-        //   parent 0, so it's last → true). col 1 ← A: A is NOT the last child of
-        //   root → false. So D's ancestors_last == [true, false].
+    fn build_filtered_ancestors_last_reflects_visible_siblings() {
+        // 1
+        // ├── 10
+        // │    ├── 20
+        // │    └── 21
+        // └── 11
         let snap = snap_from(vec![
             mk_proc(1, 0),
             mk_proc(10, 1),
@@ -300,25 +367,54 @@ mod tests {
             mk_proc(20, 10),
             mk_proc(21, 10),
         ]);
-        let p2c = build_parent_to_children(&snap);
-        let pid_to_idx = build_pid_to_idx(&snap);
-        let v = build_visible(&snap, &p2c, &pid_to_idx, id_for(&snap, 1));
-        // Order should be: 1, 10 (A), 20 (C), 21 (D), 11 (B)
-        let pids: Vec<i32> = v.iter().map(|n| pid_at(&snap, n)).collect();
-        assert_eq!(pids, vec![1, 10, 20, 21, 11]);
+        // Match 20: keep = {1, 10, 20}. 11 and 21 hidden.
+        let v = build(&snap, &[20], false);
+        let pids = pids_in(&snap, &v);
+        assert_eq!(pids, vec![1, 10, 20]);
 
-        let d_node = v.iter().find(|n| pid_at(&snap, n) == 21).unwrap();
-        assert_eq!(d_node.depth, 2);
-        assert_eq!(d_node.ancestors_last, vec![true, false]);
-        assert_eq!(d_node.gutter_kind, GutterKind::Leaf);
+        // With 21 hidden, 20 is now the only/last visible child of 10. Without
+        // the visible-aware logic, 20 would still be marked non-last (since 21
+        // exists in the raw children list).
+        let twenty = v.iter().find(|n| pid_at(&snap, n) == 20).unwrap();
+        assert!(twenty.is_last_child);
+        assert_eq!(twenty.gutter_kind, GutterKind::Leaf);
+        assert_eq!(twenty.ancestors_last, vec![true]);
 
-        let c_node = v.iter().find(|n| pid_at(&snap, n) == 20).unwrap();
-        assert_eq!(c_node.gutter_kind, GutterKind::Branch);
-        assert_eq!(c_node.ancestors_last, vec![true, false]);
+        // With 11 hidden, 10 is also now last among visible children of 1.
+        let ten = v.iter().find(|n| pid_at(&snap, n) == 10).unwrap();
+        assert!(ten.is_last_child);
+        assert_eq!(ten.gutter_kind, GutterKind::Leaf);
+    }
 
-        let b_node = v.iter().find(|n| pid_at(&snap, n) == 11).unwrap();
-        assert_eq!(b_node.gutter_kind, GutterKind::Leaf);
-        assert_eq!(b_node.depth, 1);
-        assert_eq!(b_node.ancestors_last, vec![true]);
+    #[test]
+    fn build_filtered_kthread_match_dropped_by_mask() {
+        // 1 (regular), 2 (kthread root), 6 (kthread, child of 2).
+        let mut procs = vec![mk_proc(1, 0), mk_proc(2, 0), mk_proc(6, 2)];
+        procs[1].is_kernel_thread = true;
+        procs[2].is_kernel_thread = true;
+        let snap = snap_from(procs);
+
+        // Match the kthread 6 with hide_kernel_threads=true → it's filtered out
+        // of `matched` before closure; result is empty (no non-kthread is in
+        // the chain).
+        let v = build(&snap, &[6], true);
+        assert!(v.is_empty(), "got {:?}", pids_in(&snap, &v));
+
+        // Empty match with hide_kernel_threads=true → only the non-kthread 1.
+        let v = build(&snap, &[], true);
+        assert_eq!(pids_in(&snap, &v), vec![1]);
+
+        // Without the mask, the kthread chain shows.
+        let v = build(&snap, &[6], false);
+        assert_eq!(pids_in(&snap, &v), vec![2, 6]);
+    }
+
+    #[test]
+    fn build_filtered_multiple_roots_with_empty_matched() {
+        // Two disjoint roots, no matches → both show.
+        let snap = snap_from(vec![mk_proc(1, 0), mk_proc(2, 1), mk_proc(5, 0)]);
+        let v = build(&snap, &[], false);
+        // Order: root 1 + its subtree, then root 5. PID ascending.
+        assert_eq!(pids_in(&snap, &v), vec![1, 2, 5]);
     }
 }

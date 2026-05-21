@@ -7,14 +7,7 @@ use ratatui::{
 
 use crate::{
     app::{event::Focus, state::App},
-    consts::{
-        FOCUS_ACCENT,
-        LOAD_VIEW_HEIGHT,
-        MIN_COLS,
-        MIN_ROWS,
-        SEARCH_BOX_HEIGHT,
-        STATUS_LINE_HEIGHT,
-    },
+    consts::{FOCUS_ACCENT, MIN_COLS, MIN_ROWS, SEARCH_BOX_HEIGHT, STATUS_LINE_HEIGHT},
 };
 
 pub fn focused_block(title: &'static str, focused: bool) -> Block<'static> {
@@ -28,7 +21,6 @@ pub fn focused_block(title: &'static str, focused: bool) -> Block<'static> {
 }
 
 pub mod help_modal;
-pub mod load_view;
 pub mod search_box;
 pub mod signal_modal;
 pub mod status_line;
@@ -46,7 +38,6 @@ pub fn draw(frame: &mut Frame, app: &App) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(SEARCH_BOX_HEIGHT),
-            Constraint::Length(LOAD_VIEW_HEIGHT),
             Constraint::Min(0),
             Constraint::Length(STATUS_LINE_HEIGHT),
         ])
@@ -55,18 +46,16 @@ pub fn draw(frame: &mut Frame, app: &App) {
     search_box::render(frame, chunks[0], app);
 
     if app.latest.is_none() {
-        // Bordered "loading" placeholder in the load pane until the first snapshot.
-        let block = focused_block(" load ", app.focus == Focus::Load);
+        let block = focused_block(" tree ", app.focus == Focus::Tree);
         let inner = block.inner(chunks[1]);
         frame.render_widget(block, chunks[1]);
         let p = Paragraph::new("loading…").alignment(Alignment::Center);
         frame.render_widget(p, inner);
     } else {
-        load_view::render(frame, chunks[1], app);
+        tree_view::render(frame, chunks[1], app);
     }
 
-    tree_view::render(frame, chunks[2], app);
-    status_line::render(frame, chunks[3], app);
+    status_line::render(frame, chunks[2], app);
 
     if app.help_open {
         help_modal::render(frame, area, app);

@@ -35,17 +35,19 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
 
 fn build_left(app: &App) -> Vec<Span<'static>> {
     let focus = app.focus.label();
-    let sort = app.sort.label();
 
     let mut spans: Vec<Span<'static>> = Vec::new();
     spans.push(Span::raw(format!("[{focus}]  ")));
 
     match app.latest.as_deref() {
         Some(snap) => {
-            let n = app.filtered_indices.len();
-            let m = snap.processes.len();
-            spans.push(Span::raw(format!("{n}/{m} procs  ")));
-            spans.push(Span::raw(format!("[sort: {sort}]")));
+            let matched = if app.query.groups.is_empty() {
+                snap.processes.len()
+            } else {
+                app.matched_pids.len()
+            };
+            let total = snap.processes.len();
+            spans.push(Span::raw(format!("{matched}/{total} procs")));
             if app.paused {
                 spans.push(Span::raw("  [paused]"));
             }
@@ -59,8 +61,7 @@ fn build_left(app: &App) -> Vec<Span<'static>> {
             )));
         }
         None => {
-            spans.push(Span::raw("—/— procs  "));
-            spans.push(Span::raw(format!("[sort: {sort}]")));
+            spans.push(Span::raw("—/— procs"));
             if app.paused {
                 spans.push(Span::raw("  [paused]"));
             }

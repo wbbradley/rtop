@@ -5,7 +5,11 @@ use crossbeam_channel::{Receiver, Sender, bounded, select};
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::DefaultTerminal;
 
-use crate::{consts::EVENT_CHANNEL_CAP, process::Snapshot, ui};
+use crate::{
+    consts::{EVENT_CHANNEL_CAP, TREE_HALF_PAGE},
+    process::Snapshot,
+    ui,
+};
 
 pub mod event;
 pub mod state;
@@ -106,7 +110,6 @@ fn handle_key(app: &mut App, k: KeyEvent) {
     }
     match app.focus {
         Focus::Search => handle_search_key(app, k),
-        Focus::Load => handle_load_key(app, k),
         Focus::Tree => handle_tree_key(app, k),
     }
 }
@@ -114,9 +117,8 @@ fn handle_key(app: &mut App, k: KeyEvent) {
 fn handle_search_key(app: &mut App, k: KeyEvent) {
     let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
     match k.code {
-        KeyCode::Char('n') if ctrl => move_cursor(app, 1),
-        KeyCode::Char('p') if ctrl => move_cursor(app, -1),
-        KeyCode::Char('K') if !ctrl => open_signal_modal(app),
+        KeyCode::Char('n') if ctrl => move_tree_cursor(app, 1),
+        KeyCode::Char('p') if ctrl => move_tree_cursor(app, -1),
         KeyCode::Char(c) if !ctrl => {
             app.query_text.push(c);
             app.refilter();
@@ -125,79 +127,15 @@ fn handle_search_key(app: &mut App, k: KeyEvent) {
             app.query_text.pop();
             app.refilter();
         }
-        KeyCode::Esc if !app.query_text.is_empty() => {
-            app.query_text.clear();
-            app.refilter();
-        }
-        KeyCode::Tab => app.focus = Focus::Load,
-        KeyCode::BackTab => app.focus = Focus::Tree,
-        KeyCode::Enter => {
-            app.focus = Focus::Load;
-            app.load_cursor = 0;
-            app.adjust_offset_for_scrolloff(usize::MAX);
-        }
-        _ => {}
-    }
-}
-
-fn handle_load_key(app: &mut App, k: KeyEvent) {
-    let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
-
-    let was_pending_g = app.pending_g;
-    // Reset by default; specific arms set it back to true if appropriate.
-    app.pending_g = false;
-
-    match k.code {
-        KeyCode::Char('j') => move_cursor(app, 1),
-        KeyCode::Char('k') => move_cursor(app, -1),
-        KeyCode::Char('K') => open_signal_modal(app),
-        KeyCode::Char('g') => {
-            if was_pending_g {
-                app.load_cursor = 0;
-                app.adjust_offset_for_scrolloff(usize::MAX);
-            } else {
-                app.pending_g = true;
-            }
-        }
-        KeyCode::Char('G') => {
-            let len = app.filtered_indices.len();
-            app.load_cursor = len.saturating_sub(1);
-            app.adjust_offset_for_scrolloff(usize::MAX);
-        }
-        KeyCode::Char('d') if ctrl => {
-            let half = half_page(app);
-            move_cursor(app, half as isize);
-        }
-        KeyCode::Char('u') if ctrl => {
-            let half = half_page(app);
-            move_cursor(app, -(half as isize));
-        }
-        KeyCode::Char('s') => {
-            app.sort = app.sort.next();
-            app.refilter();
-        }
-        KeyCode::Char(' ') => {
-            app.paused = !app.paused;
-        }
-        KeyCode::Char('/') => {
-            app.query_text.clear();
-            app.focus = Focus::Search;
-            app.refilter();
-        }
         KeyCode::Esc => {
-            app.focus = Focus::Search;
+            app.query_text.clear();
+            app.refilter();
         }
-        KeyCode::Tab => {
-            app.focus = Focus::Tree;
-        }
-        KeyCode::BackTab => {
-            app.focus = Focus::Search;
-        }
+        KeyCode::Tab | KeyCode::BackTab => app.focus = Focus::Tree,
         KeyCode::Enter => {
-            if let Some(pid) = current_selected_pid(app) {
-                app.query_text = format!("pid:{pid}");
-                app.refilter();
-            }
+            app.focus = Focus::Tree;
+            app.ensure_tree_built();
+            app.jump_tree_cursor_to_first_match();
         }
         _ => {}
     }
@@ -228,27 +166,18 @@ fn handle_tree_key(app: &mut App, k: KeyEvent) {
             update_tree_cursor_id(app);
             app.adjust_tree_offset_for_scrolloff(usize::MAX);
         }
-        KeyCode::Char('d') if ctrl => {
-            let half = tree_half_page();
-            move_tree_cursor(app, half as isize);
-        }
-        KeyCode::Char('u') if ctrl => {
-            let half = tree_half_page();
-            move_tree_cursor(app, -(half as isize));
+        KeyCode::Char('d') if ctrl => move_tree_cursor(app, TREE_HALF_PAGE as isize),
+        KeyCode::Char('u') if ctrl => move_tree_cursor(app, -(TREE_HALF_PAGE as isize)),
+        KeyCode::Char(' ') => {
+            app.paused = !app.paused;
         }
         KeyCode::Char('/') => {
             app.query_text.clear();
             app.focus = Focus::Search;
             app.refilter();
         }
-        KeyCode::Esc => {
+        KeyCode::Esc | KeyCode::Tab | KeyCode::BackTab => {
             app.focus = Focus::Search;
-        }
-        KeyCode::Tab => {
-            app.focus = Focus::Search;
-        }
-        KeyCode::BackTab => {
-            app.focus = Focus::Load;
         }
         KeyCode::Enter => {
             if let Some(pid) = current_tree_cursor_pid(app) {
@@ -258,28 +187,6 @@ fn handle_tree_key(app: &mut App, k: KeyEvent) {
         }
         _ => {}
     }
-}
-
-fn move_cursor(app: &mut App, delta: isize) {
-    if app.filtered_indices.is_empty() {
-        return;
-    }
-    let len = app.filtered_indices.len() as isize;
-    let cur = app.load_cursor as isize;
-    let new = (cur + delta).clamp(0, len - 1);
-    app.load_cursor = new as usize;
-    app.adjust_offset_for_scrolloff(usize::MAX);
-}
-
-fn half_page(_app: &App) -> usize {
-    use crate::consts::LOAD_VIEW_VISIBLE_ROWS;
-    (LOAD_VIEW_VISIBLE_ROWS / 2).max(1)
-}
-
-fn current_selected_pid(app: &App) -> Option<i32> {
-    let snap = app.latest.as_deref()?;
-    let &idx = app.filtered_indices.get(app.load_cursor)?;
-    snap.processes.get(idx).map(|p| p.id.pid)
 }
 
 fn move_tree_cursor(app: &mut App, delta: isize) {
@@ -306,11 +213,6 @@ fn update_tree_cursor_id(app: &mut App) {
         .tree_visible
         .get(app.tree_cursor)
         .map(|n| snap.processes[n.proc_idx].id);
-}
-
-fn tree_half_page() -> usize {
-    use crate::consts::LOAD_VIEW_VISIBLE_ROWS;
-    (LOAD_VIEW_VISIBLE_ROWS / 2).max(1)
 }
 
 fn current_tree_cursor_pid(app: &App) -> Option<i32> {
