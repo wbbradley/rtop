@@ -4,6 +4,8 @@ A TUI process monitor in the spirit of `top`/`htop`, with vim-style navigation, 
 
 ## Next Up
 
+_No queued tasks._
+
 ## Architecture Reference
 
 Self-contained context so a developer picking up any phase has what they need.
@@ -20,10 +22,12 @@ Search box state is canonical. The tree pane shows the closure of the matched-PI
 
 ### Search DSL
 
-- Prefixed terms (case-insensitive substring): `pid:`, `ppid:`, `user:`, `name:`, `cmd:`, `state:`.
-- Bare terms: case-insensitive substring match against `name + " " + cmdline + " " + user`.
+- String-valued terms are **case-insensitive, unanchored regexes** (`regex` crate): the `user:` / `name:` / `cmd:` prefixes and bare terms. `^`/`$` anchor; an inline `(?-i)` opts back into case sensitivity. Bare terms match against `name + " " + cmdline + " " + user`.
+- `pid:` / `ppid:`: exact integer equality. `state:`: single-char equality.
 - Space-separated terms within an OR-group = AND. Comma separates OR-groups (adjacent to whitespace or token boundary; commas inside a token are literal). No negation in v1.
 - `pid:X` filters by exact PID equality; the tree cursor auto-positions on the first matching node.
+- An uncompilable regex (common mid-typing, e.g. `fire(`) is non-constraining — skipped within its AND-group — and a dim "invalid regex" hint shows in the status-line right slot.
+- Matched substrings are painted amber (`SEARCH_MATCH_FG`) in the visible tree rows.
 
 ### Refresh & threading
 
@@ -123,7 +127,7 @@ No magic numbers anywhere. All tunables live in `consts.rs`:
 
 ### Visual rules
 
-- ANSI 16 for semantic colors (CPU, STATE, kernel threads, USER, errors). One truecolor accent (`FOCUS_ACCENT`, RGB 254,128,25) reserved for the focused-pane indicator. No theming.
+- ANSI 16 for semantic colors (CPU, STATE, kernel threads, USER, errors). Two truecolor accents: `FOCUS_ACCENT` (RGB 254,128,25) for the focused-pane indicator and `SEARCH_MATCH_FG` (RGB 255,176,0, amber) for search-match highlighting in the tree. No theming.
 - Selected row: reverse video.
 - CPU%: yellow > `CPU_WARN_PCT`, red > `CPU_DANGER_PCT`, dim < 1.
 - STATE colors: R=green, S=default, D=red, Z=red bold, T=yellow.

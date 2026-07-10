@@ -13,21 +13,31 @@ use crate::{
     format,
 };
 
+const INVALID_REGEX_HINT: &str = "invalid regex";
+
 pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     let left_spans = build_left(app);
     let left = Paragraph::new(Line::from(left_spans));
     frame.render_widget(left, area);
 
     let now = Instant::now();
-    let right: Line = match flash_active(&app.flash, now) {
-        Some(msg) => Line::from(Span::styled(
+    let right: Line = if let Some(msg) = flash_active(&app.flash, now) {
+        // A transient kill-error flash wins the slot (red bold).
+        Line::from(Span::styled(
             msg.to_string(),
             Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-        )),
-        None => Line::from(Span::styled(
+        ))
+    } else if app.compiled.has_invalid() {
+        // Persistent low-key hint while the query has an uncompilable term.
+        Line::from(Span::styled(
+            INVALID_REGEX_HINT.to_string(),
+            Style::default().add_modifier(Modifier::DIM),
+        ))
+    } else {
+        Line::from(Span::styled(
             hint_for(app.focus).to_string(),
             Style::default().add_modifier(Modifier::DIM),
-        )),
+        ))
     };
     let right_para = Paragraph::new(right).alignment(Alignment::Right);
     frame.render_widget(right_para, area);

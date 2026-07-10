@@ -7,10 +7,11 @@ use ratatui::{
     text::{Line, Span},
     widgets::Paragraph,
 };
+use regex::Regex;
 
 use crate::{
     app::{event::Focus, state::App},
-    consts::{CPU_DANGER_PCT, CPU_WARN_PCT, SCROLLOFF},
+    consts::{CPU_DANGER_PCT, CPU_WARN_PCT, SCROLLOFF, SEARCH_MATCH_FG},
     format,
     process::Process,
     tree::{GutterKind, TreeNode},
@@ -76,6 +77,8 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         |i| heights[i],
     );
 
+    let highlights = app.compiled.highlight_regexes();
+
     let mut lines: Vec<Line> = Vec::with_capacity(visible_rows);
     let mut consumed = 0usize;
     let mut idx = offset;
@@ -83,7 +86,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         let node = &app.tree_visible[idx];
         let p = &snap.processes[node.proc_idx];
         let parent_user = parent_user(snap, node, &app.tree_visible);
-        let row_lines = build_row(p, node, parent_user.as_deref(), pane_width);
+        let row_lines = build_row(p, node, parent_user.as_deref(), pane_width, highlights);
         let selected = idx == app.tree_cursor;
         for line in row_lines {
             if consumed >= visible_rows {
@@ -222,6 +225,7 @@ fn build_row(
     node: &TreeNode,
     parent_user: Option<&str>,
     pane_width: usize,
+    highlights: &[Regex],
 ) -> Vec<Line<'static>> {
     let pid = format!("{:>7}", p.id.pid);
     let cpu = cpu_span(p.cpu_pct);
@@ -258,20 +262,71 @@ fn build_row(
         spans.push(Span::raw(rss));
         spans.push(Span::raw("  "));
         spans.push(Span::raw(gutter));
-        spans.push(Span::raw(first));
+        spans.extend(highlight_spans(&first, highlights, Style::default()));
         if show_user {
-            spans.push(Span::styled(user_tag, Style::default().fg(Color::Cyan)));
+            spans.extend(highlight_spans(
+                &user_tag,
+                highlights,
+                Style::default().fg(Color::Cyan),
+            ));
         }
         lines.push(apply_dim_if_kthread(Line::from(spans), p));
     }
 
     let cont_prefix = continuation_prefix(node);
     for segment in iter {
-        let line = Line::from(vec![Span::raw(cont_prefix.clone()), Span::raw(segment)]);
-        lines.push(apply_dim_if_kthread(line, p));
+        let mut spans: Vec<Span<'static>> = vec![Span::raw(cont_prefix.clone())];
+        spans.extend(highlight_spans(&segment, highlights, Style::default()));
+        lines.push(apply_dim_if_kthread(Line::from(spans), p));
     }
 
     lines
+}
+
+/// Split `text` into plain and amber sub-spans wherever any `regexes` matches.
+/// Zero-width matches are skipped; overlapping/adjacent matches merge into one
+/// contiguous amber run. Empty `text`/`regexes` or no match → a single span.
+/// Regex match boundaries fall on UTF-8 char boundaries, so byte slicing is safe.
+fn highlight_spans(text: &str, regexes: &[Regex], base: Style) -> Vec<Span<'static>> {
+    if text.is_empty() || regexes.is_empty() {
+        return vec![Span::styled(text.to_string(), base)];
+    }
+
+    let mut ranges: Vec<(usize, usize)> = Vec::new();
+    for re in regexes {
+        for m in re.find_iter(text) {
+            if m.start() != m.end() {
+                ranges.push((m.start(), m.end()));
+            }
+        }
+    }
+    if ranges.is_empty() {
+        return vec![Span::styled(text.to_string(), base)];
+    }
+
+    ranges.sort_by_key(|&(s, _)| s);
+    let mut merged: Vec<(usize, usize)> = Vec::with_capacity(ranges.len());
+    for (s, e) in ranges {
+        match merged.last_mut() {
+            Some(last) if s <= last.1 => last.1 = last.1.max(e),
+            _ => merged.push((s, e)),
+        }
+    }
+
+    let match_style = base.fg(SEARCH_MATCH_FG);
+    let mut spans: Vec<Span<'static>> = Vec::with_capacity(merged.len() * 2 + 1);
+    let mut cursor = 0usize;
+    for (s, e) in merged {
+        if s > cursor {
+            spans.push(Span::styled(text[cursor..s].to_string(), base));
+        }
+        spans.push(Span::styled(text[s..e].to_string(), match_style));
+        cursor = e;
+    }
+    if cursor < text.len() {
+        spans.push(Span::styled(text[cursor..].to_string(), base));
+    }
+    spans
 }
 
 fn apply_dim_if_kthread(line: Line<'static>, p: &Process) -> Line<'static> {
@@ -542,5 +597,66 @@ mod tests {
         heights[5] = 5;
         let r = clamp_offset(0, 5, 20, 3, |i| heights[i]);
         assert_eq!(r, 5);
+    }
+
+    // ---- highlight_spans ----
+
+    fn re(p: &str) -> Regex {
+        Regex::new(p).unwrap()
+    }
+
+    #[test]
+    fn highlight_no_match_single_span() {
+        let spans = highlight_spans("firefox", &[re("zzz")], Style::default());
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].content.as_ref(), "firefox");
+        assert_eq!(spans[0].style.fg, None);
+    }
+
+    #[test]
+    fn highlight_empty_regexes_single_span() {
+        let spans = highlight_spans("firefox", &[], Style::default());
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].content.as_ref(), "firefox");
+    }
+
+    #[test]
+    fn highlight_single_match_middle() {
+        let spans = highlight_spans("firefox", &[re("efo")], Style::default());
+        assert_eq!(spans.len(), 3);
+        assert_eq!(spans[0].content.as_ref(), "fir");
+        assert_eq!(spans[0].style.fg, None);
+        assert_eq!(spans[1].content.as_ref(), "efo");
+        assert_eq!(spans[1].style.fg, Some(SEARCH_MATCH_FG));
+        assert_eq!(spans[2].content.as_ref(), "x");
+        assert_eq!(spans[2].style.fg, None);
+    }
+
+    #[test]
+    fn highlight_overlapping_matches_merge() {
+        let spans = highlight_spans("firefox", &[re("fire"), re("efox")], Style::default());
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].content.as_ref(), "firefox");
+        assert_eq!(spans[0].style.fg, Some(SEARCH_MATCH_FG));
+    }
+
+    #[test]
+    fn highlight_adjacent_matches_merge() {
+        let spans = highlight_spans("abcdef", &[re("abc"), re("def")], Style::default());
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].content.as_ref(), "abcdef");
+        assert_eq!(spans[0].style.fg, Some(SEARCH_MATCH_FG));
+    }
+
+    #[test]
+    fn highlight_multiple_disjoint_matches() {
+        let spans = highlight_spans("a.b.a", &[re("a")], Style::default());
+        assert_eq!(spans.len(), 3);
+        assert_eq!(spans[0].content.as_ref(), "a");
+        assert_eq!(spans[0].style.fg, Some(SEARCH_MATCH_FG));
+        assert_eq!(spans[1].content.as_ref(), ".b.");
+        assert_eq!(spans[1].style.fg, None);
+        assert_eq!(spans[2].content.as_ref(), "a");
+        assert_eq!(spans[2].style.fg, Some(SEARCH_MATCH_FG));
     }
 }

@@ -1,53 +1,42 @@
 use crate::{
     process::Process,
-    search::parser::{Field, Query, Term},
+    search::compiled::{CompiledQuery, CompiledTerm, StrTarget},
 };
 
 /// Per-process predicate. An empty query matches everything; otherwise the
 /// process must satisfy at least one OR-group (all terms in that group).
-pub fn matches(query: &Query, p: &Process) -> bool {
-    if query.groups.is_empty() {
+pub fn matches(cq: &CompiledQuery, p: &Process) -> bool {
+    if cq.is_empty() {
         return true;
     }
-    query
-        .groups
+    cq.groups()
         .iter()
         .any(|group| group.iter().all(|term| term_matches(p, term)))
 }
 
-fn term_matches(p: &Process, term: &Term) -> bool {
+fn term_matches(p: &Process, term: &CompiledTerm) -> bool {
     match term {
-        Term::Prefixed { field, value } => match field {
-            Field::Pid => match value.parse::<i32>() {
-                Ok(n) => p.id.pid == n,
-                Err(_) => false,
-            },
-            Field::Ppid => match value.parse::<i32>() {
-                Ok(n) => p.ppid == n,
-                Err(_) => false,
-            },
-            Field::User => contains_ci(&p.user, value),
-            Field::Name => contains_ci(&p.name, value),
-            Field::Cmd => contains_ci(&cmdline_joined(p), value),
-            Field::State => p.state.eq_ignore_ascii_case(&first_char(value)),
+        CompiledTerm::Pid(n) => p.id.pid == *n,
+        CompiledTerm::Ppid(n) => p.ppid == *n,
+        CompiledTerm::State(c) => p.state.eq_ignore_ascii_case(c),
+        CompiledTerm::Str { field, re } => match field {
+            StrTarget::User => re.is_match(&p.user),
+            StrTarget::Name => re.is_match(&p.name),
+            StrTarget::Cmd => re.is_match(&cmdline_joined(p)),
+            StrTarget::Bare => {
+                let haystack = format!("{} {} {}", p.name, cmdline_joined(p), p.user);
+                re.is_match(&haystack)
+            }
         },
-        Term::Bare(s) => {
-            let haystack = format!("{} {} {}", p.name, cmdline_joined(p), p.user);
-            contains_ci(&haystack, s)
-        }
+        // Uncompilable regex is non-constraining within its AND-group.
+        CompiledTerm::Invalid => true,
+        // e.g. `ppid:<non-int>` never matches.
+        CompiledTerm::Never => false,
     }
-}
-
-fn contains_ci(haystack: &str, needle: &str) -> bool {
-    haystack.to_lowercase().contains(&needle.to_lowercase())
 }
 
 fn cmdline_joined(p: &Process) -> String {
     p.cmdline.join(" ")
-}
-
-fn first_char(s: &str) -> char {
-    s.chars().next().unwrap_or('\0')
 }
 
 #[cfg(test)]
@@ -124,10 +113,14 @@ mod tests {
         snap.processes.iter().find(|p| p.id.pid == pid).unwrap()
     }
 
+    fn compiled(s: &str) -> CompiledQuery {
+        CompiledQuery::compile(&crate::search::parse(s))
+    }
+
     #[test]
     fn empty_query_matches_all() {
         let snap = fixture();
-        let q = crate::search::parse("");
+        let q = compiled("");
         for p in &snap.processes {
             assert!(matches(&q, p));
         }
@@ -136,7 +129,7 @@ mod tests {
     #[test]
     fn matches_pid_exact() {
         let snap = fixture();
-        let q = crate::search::parse("pid:42");
+        let q = compiled("pid:42");
         assert!(matches(&q, pid_of(&snap, 42)));
         assert!(!matches(&q, pid_of(&snap, 101)));
     }
@@ -144,7 +137,7 @@ mod tests {
     #[test]
     fn matches_ppid() {
         let snap = fixture();
-        let q = crate::search::parse("ppid:1");
+        let q = compiled("ppid:1");
         assert!(matches(&q, pid_of(&snap, 42)));
         assert!(matches(&q, pid_of(&snap, 101)));
         assert!(matches(&q, pid_of(&snap, 303)));
@@ -155,7 +148,7 @@ mod tests {
     #[test]
     fn matches_user_case_insensitive() {
         let snap = fixture();
-        let q = crate::search::parse("user:WBB");
+        let q = compiled("user:WBB");
         assert!(matches(&q, pid_of(&snap, 101)));
         assert!(!matches(&q, pid_of(&snap, 1)));
     }
@@ -163,7 +156,7 @@ mod tests {
     #[test]
     fn matches_name() {
         let snap = fixture();
-        let q = crate::search::parse("name:vim");
+        let q = compiled("name:vim");
         assert!(matches(&q, pid_of(&snap, 303)));
         assert!(!matches(&q, pid_of(&snap, 202)));
     }
@@ -171,7 +164,7 @@ mod tests {
     #[test]
     fn matches_cmd() {
         let snap = fixture();
-        let q = crate::search::parse("cmd:profile");
+        let q = compiled("cmd:profile");
         assert!(matches(&q, pid_of(&snap, 202)));
         assert!(!matches(&q, pid_of(&snap, 303)));
     }
@@ -179,7 +172,7 @@ mod tests {
     #[test]
     fn matches_state() {
         let snap = fixture();
-        let q = crate::search::parse("state:R");
+        let q = compiled("state:R");
         assert!(matches(&q, pid_of(&snap, 202)));
         assert!(!matches(&q, pid_of(&snap, 101)));
     }
@@ -187,7 +180,7 @@ mod tests {
     #[test]
     fn matches_bare_substring() {
         let snap = fixture();
-        let q = crate::search::parse("firef");
+        let q = compiled("firef");
         assert!(matches(&q, pid_of(&snap, 202)));
         assert!(!matches(&q, pid_of(&snap, 303)));
     }
@@ -195,7 +188,7 @@ mod tests {
     #[test]
     fn matches_and_within_group() {
         let snap = fixture();
-        let q = crate::search::parse("user:wbbradley name:vim");
+        let q = compiled("user:wbbradley name:vim");
         assert!(matches(&q, pid_of(&snap, 303)));
         assert!(!matches(&q, pid_of(&snap, 202)));
         assert!(!matches(&q, pid_of(&snap, 1)));
@@ -204,7 +197,7 @@ mod tests {
     #[test]
     fn matches_or_across_groups() {
         let snap = fixture();
-        let q = crate::search::parse("name:firefox, name:vim");
+        let q = compiled("name:firefox, name:vim");
         assert!(matches(&q, pid_of(&snap, 202)));
         assert!(matches(&q, pid_of(&snap, 303)));
         assert!(!matches(&q, pid_of(&snap, 1)));
@@ -220,9 +213,74 @@ mod tests {
     #[test]
     fn matches_or_across_groups_no_whitespace() {
         let snap = fixture();
-        let q = crate::search::parse("name:firefox,name:vim");
+        let q = compiled("name:firefox,name:vim");
         assert!(matches(&q, pid_of(&snap, 202)));
         assert!(matches(&q, pid_of(&snap, 303)));
         assert!(!matches(&q, pid_of(&snap, 1)));
+    }
+
+    // ---- regex semantics ----
+
+    #[test]
+    fn regex_anchor_start_on_name() {
+        let snap = fixture();
+        let q = compiled("name:^fire");
+        assert!(matches(&q, pid_of(&snap, 202)));
+        assert!(!matches(&q, pid_of(&snap, 42)));
+    }
+
+    #[test]
+    fn regex_anchor_end_on_cmd() {
+        let snap = fixture();
+        // firefox cmdline joins to "/usr/bin/firefox --profile".
+        let q = compiled("cmd:profile$");
+        assert!(matches(&q, pid_of(&snap, 202)));
+        assert!(!matches(&q, pid_of(&snap, 303)));
+    }
+
+    #[test]
+    fn regex_full_anchor_on_user() {
+        let snap = fixture();
+        let q = compiled("user:^root$");
+        assert!(matches(&q, pid_of(&snap, 42)));
+        assert!(!matches(&q, pid_of(&snap, 101)));
+    }
+
+    #[test]
+    fn regex_bare_wildcard() {
+        let snap = fixture();
+        let q = compiled("fire.*fox");
+        assert!(matches(&q, pid_of(&snap, 202)));
+        assert!(!matches(&q, pid_of(&snap, 303)));
+    }
+
+    #[test]
+    fn regex_case_insensitive_by_default() {
+        let snap = fixture();
+        let q = compiled("name:FIRE");
+        assert!(matches(&q, pid_of(&snap, 202)));
+    }
+
+    // ---- invalid regex is non-constraining ----
+
+    #[test]
+    fn invalid_regex_matches_everything() {
+        let snap = fixture();
+        let q = compiled("fire(");
+        assert!(q.has_invalid());
+        for p in &snap.processes {
+            assert!(matches(&q, p));
+        }
+    }
+
+    #[test]
+    fn invalid_regex_skipped_within_and_group() {
+        let snap = fixture();
+        // One valid + one invalid term in the same AND-group: the invalid term
+        // is skipped, so only the valid `firefox` constrains.
+        let q = compiled("firefox fire(");
+        assert!(q.has_invalid());
+        assert!(matches(&q, pid_of(&snap, 202)));
+        assert!(!matches(&q, pid_of(&snap, 303)));
     }
 }

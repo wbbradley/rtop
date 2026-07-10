@@ -6,15 +6,7 @@ use std::{
 
 use anyhow::{Context, anyhow};
 use libc::{
-    CTL_HW,
-    CTL_KERN,
-    HW_MEMSIZE,
-    KERN_ARGMAX,
-    KERN_PROCARGS2,
-    c_char,
-    c_int,
-    c_void,
-    sysctl,
+    CTL_HW, CTL_KERN, HW_MEMSIZE, KERN_ARGMAX, KERN_PROCARGS2, c_char, c_int, c_void, sysctl,
 };
 use libproc::{
     libproc::{

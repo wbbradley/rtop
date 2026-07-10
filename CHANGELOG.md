@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Changed
+- String-valued search terms (`user:`, `name:`, `cmd:`, and bare terms) are now **case-insensitive, unanchored regexes** (via the `regex` crate) instead of plain substrings. `^`/`$` anchors and inline flags (e.g. `(?-i)` to opt back into case sensitivity) are available. `pid:`/`ppid:` remain integer equality and `state:` remains single-char equality; comma/space OR/AND semantics are unchanged.
+
+### Added
+- Matched substrings are painted amber (`SEARCH_MATCH_FG`, RGB 255,176,0) in the visible tree rows — command text, the `[<comm>]` kernel-thread fallback, and the differing-user tag. Highlighting layers correctly with the reverse-video selected row and kernel-thread dimming.
+- A dim "invalid regex" hint appears in the status-line right slot while the query contains an uncompilable regex term. Such a term is treated as non-constraining (skipped within its AND-group), so a partial regex typed mid-keystroke keeps the tree populated instead of blanking it.
+
 ## [0.2.1] - 2026-05-21
 
 ### Fixed

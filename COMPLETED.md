@@ -225,3 +225,65 @@ Fixed two compounding bugs that caused `bash,dbus-daemon` (no spaces) to render 
 - `src/ui/tree_view.rs`: when the tree is empty and the query is non-empty, render a centered dim `(no matches)` placeholder inside the tree block's inner area. Empty query + empty tree (no snapshot yet) keeps the silent return.
 - `src/search/filter.rs`: added `matches_or_across_groups_no_whitespace` (`name:firefox,name:vim` matches 202 and 303 but not 1).
 - `chk` clean; `cargo test` green (84 passed, +4 vs. prior 80).
+
+## Regex search terms with amber match highlighting
+
+Turned the string-valued search terms into case-insensitive, unanchored regexes and paint their matches amber in the visible tree rows:
+
+- `cargo add regex` (1.13.0). `src/consts.rs`: added `SEARCH_MATCH_FG: Color = Color::Rgb(255, 176, 0)` (amber).
+- New `src/search/compiled.rs`: `CompiledQuery` — the compiled parallel of the pure `Query`/`Term` AST (which stays intact, since `regex::Regex` is not `PartialEq`/`Eq`). Holds `groups: Vec<Vec<CompiledTerm>>`, a flat `highlight: Vec<Regex>` union for the renderer, `has_invalid`, and `empty`. `CompiledTerm` variants: `Pid(i32)`, `Ppid(i32)`, `State(char)`, `Str { field: StrTarget, re }`, `Invalid` (uncompilable → non-constraining), `Never` (`ppid:<non-int>` → never matches). String terms compile via `RegexBuilder::new(pat).case_insensitive(true).build()`; `Regex` is `Clone` (Arc-backed) so the highlight union clones cheaply. Local `first_char` helper (filter's copy retired). Three unit tests.
+- `src/search.rs`: declared `compiled` module; re-exports `CompiledQuery`.
+- `src/search/filter.rs`: `matches`/`term_matches` now take `&CompiledQuery`/`&CompiledTerm`; `Invalid` → non-constraining (`true`), `Never` → `false`, `Str` runs `re.is_match(..)` over the appropriate field. Retired `contains_ci`/`first_char`; kept `cmdline_joined`. Adapted the existing behavior tests via a `compiled(s)` helper; added regex-semantics tests (`^`/`$` anchors, `.*`, case-insensitivity) and invalid-skip tests.
+- `src/app/state.rs`: `App` gained `pub compiled: CompiledQuery`, built in `App::new` and recomputed in `refilter` alongside `query`; the filter loop now calls `matches(&self.compiled, p)`. `query` stays canonical for the structural `groups.is_empty()` / `auto_select_pid` checks.
+- `src/ui/tree_view.rs`: added `highlight_spans(text, &[Regex], base) -> Vec<Span>` (collects non-empty match ranges across all regexes, merges overlapping/adjacent, emits base/amber sub-spans; byte-slicing is UTF-8-safe on regex boundaries). `build_row` gained a `highlights: &[Regex]` param applied to the command text, the `[<name>]` fallback, the differing-user tag, and continuation lines; `render` passes `app.compiled.highlight_regexes()`. Selected-row `REVERSED` / kthread `DIM` stay at the `Line` level. Six `highlight_spans` tests.
+- `src/ui/status_line.rs`: added `INVALID_REGEX_HINT`; right-slot precedence is kill-error flash (red bold) → dim "invalid regex" (when `app.compiled.has_invalid()`) → normal dim hint.
+- Docs: PLAN.md Search DSL + Visual rules (second truecolor); README.md ("substring" → regex, amber highlight); CHANGELOG.md `[Unreleased]`.
+- `cargo fmt` + `cargo clippy --all-targets -- -D warnings` clean; `cargo nextest run` green (104 passed, +20 vs. prior 84). Manual pty smoke of `name:^fire` and `fire(` — no panic.
+
+Original PLAN.md entry, verbatim as it existed before work began:
+
+````markdown
+### Regex search terms with amber match highlighting
+
+Turn the string-valued search terms into regular expressions and paint their matches in the visible tree rows with an amber foreground.
+
+**Scope / semantics**
+
+- String-valued terms become **unanchored, case-insensitive-by-default** regexes: bare terms and the `user:` / `name:` / `cmd:` prefixed terms. `pid:` / `ppid:` stay exact integer equality (they also drive `auto_select_pid` and the `Enter`-to-drill that writes `pid:<X>`), and `state:` stays single-char equality. The OR-of-AND-groups structure (comma = OR-group boundary, space = AND within a group) is unchanged.
+- `regex::Regex` is unanchored by default, preserving today's substring feel; `^`/`$` anchors and inline flags become available. Case-insensitivity via `RegexBuilder::case_insensitive(true)`; a user can opt back into case sensitivity with an inline `(?-i)`.
+- Keep the pure `Query`/`Term` AST in `search/parser.rs` and its equality-based unit tests intact — `regex::Regex` is not `PartialEq`/`Eq`, so regexes must **not** live inside `Term`/`Query`. Compile into a separate structure: add `src/search/compiled.rs` (declared in `search.rs`, per the `module.rs` + `module/submodule.rs` layout) exposing a `CompiledQuery` built from a `Query`, plus an accessor returning the flat set of string-term regexes for the renderer.
+
+**Invalid / partial regex (common while typing, e.g. `fire(`)**
+
+- Filter with only the successfully-compiled terms: a term whose regex fails to compile is treated as **non-constraining** (skipped within its AND-group) rather than failing the whole tree. Consequence: a query that is *only* a partial regex momentarily shows the full forest — acceptable, and better than a blank pane while typing.
+- Surface a **persistent, low-key** "invalid regex" hint on the status-line right side (the `[error|hint]` slot) for as long as the current query has an uncompilable term. This is **not** the existing `flash` mechanism (`state.rs` `set_flash` / `flash_active`), which auto-clears after `ERROR_FLASH_DURATION` and is styled red-bold for `kill(2)` errors — that is the wrong fit for a per-keystroke typing state. Add a distinct bit of `App` state (set during compile in `refilter`) and render it **dim** (e.g. `Modifier::DIM`, muted fg), visually subordinate to the transient kill-error flash. Define precedence in `status_line.rs`: an active kill-error flash wins the slot; otherwise show the invalid-regex hint; otherwise the normal hint.
+
+**Highlighting**
+
+- In `tree_view::build_row`, after `wrap_argv` produces the per-line command strings (and for the `[<name>]` kernel-thread fallback and the differing-user tag), split each raw text span into amber / plain sub-spans wherever any active highlight regex matches. Add a `highlight_spans(text, &[Regex]) -> Vec<Span>` helper. Use the **union** of all string-term regexes across all OR-groups (simplest; may occasionally highlight, e.g., a `user:` pattern inside the command text — accepted).
+- Matches that straddle a `wrap_argv` line break or are cut by the `…` ellipsis will highlight only partially — accepted, not worth mapping offsets through the wrap transform.
+- Amber comes from a new `consts.rs` const, e.g. `SEARCH_MATCH_FG: Color = Color::Rgb(255, 176, 0)` — no magic literals in the renderer. Note this is a **second truecolor** beyond `FOCUS_ACCENT`, so relax the "one truecolor accent" line in the Visual rules section (`Color::Yellow` is already taken by CPU-warn and state `T`, so it can't be reused). Preserve correct layering with the selected-row `REVERSED` and kernel-thread `DIM` line styles.
+
+**Performance**
+
+- Compile regexes once per query change in `App::refilter`, never per row. Store the `CompiledQuery` (and the flat highlight regexes) on `App`; `matches`/`term_matches` take the compiled form. Filtering already iterates all processes per keystroke; regex `is_match` replaces the `to_lowercase().contains()` allocations in `contains_ci` for string terms. Row highlighting only runs over the visible-height rows.
+
+**Acceptance criteria**
+
+- `name:^fire`, `cmd:profile$`, `user:^root$`, and bare `fire.*fox` filter as regexes; case-insensitive by default; `pid:`/`ppid:`/`state:` semantics unchanged; comma/space OR/AND semantics unchanged (existing parser + filter tests still pass).
+- A syntactically invalid regex never panics and never blanks the tree — it is skipped and the dim "invalid regex" hint appears; typing a partial regex keeps the UI responsive.
+- Visible command text (plus the `[<name>]` fallback and the user tag) shows matched substrings in amber; the highlight coexists correctly with the reverse-video selected row and kernel-thread dimming.
+- New unit tests: regex match/no-match, case-insensitivity default, invalid-regex skip behavior (and that the invalid-regex flag is set), and a `highlight_spans` test asserting span segmentation for no-match, single-match, and multi-match inputs.
+- `cargo fmt`, `cargo clippy -D warnings`, and tests all green.
+
+**Files touched**
+
+- `Cargo.toml` — `cargo add regex`.
+- `src/consts.rs` — add `SEARCH_MATCH_FG`.
+- `src/search.rs` + new `src/search/compiled.rs` — `CompiledQuery` + highlight-regex accessor.
+- `src/search/filter.rs` — `matches`/`term_matches` switch to compiled regexes; string-term `contains_ci` retired; invalid-term skip.
+- `src/app/state.rs` — `App` stores the compiled query, highlight regexes, and the invalid-regex flag; `refilter` compiles.
+- `src/ui/tree_view.rs` — `highlight_spans` + amber application in `build_row`.
+- `src/ui/status_line.rs` — render the dim invalid-regex hint with correct precedence vs. the kill-error flash.
+- Docs: `PLAN.md` Search DSL section and Visual rules (note the second truecolor); `README.md` ("substring search DSL" → regex); optionally the help modal (`src/ui/help_modal.rs`).
+````

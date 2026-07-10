@@ -9,8 +9,8 @@ Early development; see [PLAN.md](PLAN.md) for roadmap.
 ## Features
 
 - **Vim-style two-pane TUI**: search box on top, process tree below. The tree filters itself directly off the query — no intermediate sorted list.
-- **Substring search DSL**: `pid:`, `ppid:`, `user:`, `name:`, `cmd:`, `state:` prefixes; bare terms search across name+cmdline+user. Space-separated terms within a group are AND-ed; a comma separates OR-groups.
-- **Match-driven tree**: every matching process is shown together with its full parent chain (root → match) and its complete subtree. Multiple disjoint matches become separate roots; empty query shows the full forest. Tree cursor navigates with `j`/`k`/`gg`/`G`/Ctrl-d/Ctrl-u; `Enter` drills into a PID.
+- **Regex search DSL**: `pid:`, `ppid:`, `user:`, `name:`, `cmd:`, `state:` prefixes; bare terms search across name+cmdline+user. String-valued terms (`user:`/`name:`/`cmd:` and bare terms) are case-insensitive, unanchored regexes (`^`/`$` anchors, `(?-i)` for case sensitivity); `pid:`/`ppid:` are integer equality and `state:` is single-char. Space-separated terms within a group are AND-ed; a comma separates OR-groups. An invalid regex is skipped (never blanks the tree) with a dim "invalid regex" hint.
+- **Match-driven tree**: every matching process is shown together with its full parent chain (root → match) and its complete subtree, with matched substrings highlighted in amber. Multiple disjoint matches become separate roots; empty query shows the full forest. Tree cursor navigates with `j`/`k`/`gg`/`G`/Ctrl-d/Ctrl-u; `Enter` drills into a PID.
 - **Signal sending**: press `K` in the tree to open the signal modal (TERM/KILL/HUP/INT/USR1/USR2/STOP/CONT). Confirms PID 1 and self-signal.
 - **Pause** sampling with `space`; resume with `space`.
 - **CLI flags**: `--filter <expr>` pre-populates the search box; `--interval <secs>` overrides sample interval; `--no-kernel-threads` hides kernel threads.

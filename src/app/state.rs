@@ -4,7 +4,7 @@ use crate::{
     app::event::Focus,
     consts::{ERROR_FLASH_DURATION, SCROLLOFF},
     process::{ProcessId, Snapshot},
-    search::{Query, matches, parse},
+    search::{CompiledQuery, Query, matches, parse},
     tree::{TreeNode, build_filtered, build_parent_to_children, build_pid_to_idx},
 };
 
@@ -22,6 +22,10 @@ pub struct App {
     pub focus: Focus,
     pub query_text: String,
     pub query: Query,
+    /// Compiled parallel of `query` (regexes for string terms). Derived state,
+    /// recomputed alongside `query` in `refilter`; `query` stays canonical for
+    /// the structural `groups.is_empty()` / `auto_select_pid` checks.
+    pub compiled: CompiledQuery,
     pub paused: bool,
 
     /// PIDs of processes that satisfy the current query (pre-closure). Used by
@@ -87,12 +91,14 @@ pub fn flash_active(flash: &Option<(String, Instant)>, now: Instant) -> Option<&
 impl App {
     pub fn new(initial_filter: String, hide_kernel_threads: bool) -> Self {
         let query = parse(&initial_filter);
+        let compiled = CompiledQuery::compile(&query);
         Self {
             latest: None,
             quit: false,
             focus: Focus::Search,
             query_text: initial_filter,
             query,
+            compiled,
             paused: false,
             matched_pids: HashSet::new(),
             pending_g: false,
@@ -115,6 +121,7 @@ impl App {
     /// Recompute the matched-PID set from the current query text.
     pub fn refilter(&mut self) {
         self.query = parse(&self.query_text);
+        self.compiled = CompiledQuery::compile(&self.query);
         self.matched_pids.clear();
         let Some(snap) = self.latest.as_deref() else {
             return;
@@ -126,7 +133,7 @@ impl App {
             if self.hide_kernel_threads && p.is_kernel_thread {
                 continue;
             }
-            if matches(&self.query, p) {
+            if matches(&self.compiled, p) {
                 self.matched_pids.insert(p.id.pid);
             }
         }

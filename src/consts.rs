@@ -24,3 +24,4 @@ pub const EVENT_CHANNEL_CAP: usize = 64;
 pub const MACOS_ARGMAX_FALLBACK: usize = 256 * 1024;
 pub const KERNEL_THREAD_PARENT_PID: i32 = 2;
 pub const FOCUS_ACCENT: Color = Color::Rgb(254, 128, 25);
+pub const SEARCH_MATCH_FG: Color = Color::Rgb(255, 176, 0);
