@@ -4,14 +4,7 @@ A TUI process monitor in the spirit of `top`/`htop`, with vim-style navigation, 
 
 ## Next Up
 
-### Status line: left stats and right hint overlap at narrow widths
-
-The status line renders the left paragraph (`[focus]  N/M procs  [paused]   load: … mem: …`)
-and the right-aligned hint into the **same** `area` (`src/ui/status_line.rs:18-43`), drawing
-the hint second. When their combined width exceeds the terminal, the hint overwrites the tail
-of the left stats — around 120 cols the `mem:` figure disappears. Split the status-line rect
-into two width-constrained halves (or truncate/hide the hint when space is tight) so the
-load/mem stats are never clobbered. Discovered while verifying session persistence.
+_(No queued tasks.)_
 
 ## Architecture Reference
 

@@ -458,3 +458,32 @@ scope; add the state file and `--no-restore` to the CLI (PLAN.md:148-152) and Cr
   `src/app/state.rs`).
 - `chk` clean (fmt + clippy `-D warnings`); `cargo test` green. New deps added via
   `cargo add`.
+
+## Status line: left stats and right hint overlap at narrow widths
+
+Split the status-line row into two disjoint, width-constrained rects so the right-aligned
+hint can no longer clobber the left-side load/mem stats:
+
+- `src/ui/status_line.rs`: `render` now measures the left stats line via `Line::width()`,
+  gives them a `left_area` of exactly that width (capped to the row), and hands the hint a
+  `right_area` covering only the remaining columns. Because the two rects are disjoint, the
+  hint truncates into — or vanishes from — its own lane instead of overwriting the `mem:`
+  figure. Extracted the right-slot line construction (flash error → invalid-regex → focus
+  hint) into a `build_right(app, now)` helper.
+- 3 new `TestBackend`-backed render tests (128 total): the full `mem: 512MiB/1.0GiB` figure
+  survives at 100 cols (a width where the old single-`area` render clobbered it — confirmed
+  by temporarily reverting the fix and watching the test fail with `mem: 51type to filter…`),
+  stats and hint coexist in disjoint columns when wide, and a 30-col row neither panics nor
+  displaces the left half.
+- `cargo clippy --all-targets` clean; `cargo nextest run` green.
+
+Original PLAN.md entry (verbatim):
+
+> ### Status line: left stats and right hint overlap at narrow widths
+>
+> The status line renders the left paragraph (`[focus]  N/M procs  [paused]   load: … mem: …`)
+> and the right-aligned hint into the **same** `area` (`src/ui/status_line.rs:18-43`), drawing
+> the hint second. When their combined width exceeds the terminal, the hint overwrites the tail
+> of the left stats — around 120 cols the `mem:` figure disappears. Split the status-line rect
+> into two width-constrained halves (or truncate/hide the hint when space is tight) so the
+> load/mem stats are never clobbered. Discovered while verifying session persistence.
