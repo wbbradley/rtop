@@ -2,14 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [0.3.0] - 2026-07-13
 
-### Changed
-- String-valued search terms (`user:`, `name:`, `cmd:`, and bare terms) are now **case-insensitive, unanchored regexes** (via the `regex` crate) instead of plain substrings. `^`/`$` anchors and inline flags (e.g. `(?-i)` to opt back into case sensitivity) are available. `pid:`/`ppid:` remain integer equality and `state:` remains single-char equality; comma/space OR/AND semantics are unchanged.
+### Breaking Changes
+- String-valued search terms (`user:`, `name:`, `cmd:`, and bare terms) are now **case-insensitive, unanchored regexes** (via the `regex` crate) instead of plain substrings. Queries containing regex metacharacters (`. * + ? ( ) [ ] ^ $ | \`) now behave differently — escape them to match literally. `^`/`$` anchors and inline flags (e.g. `(?-i)` to opt back into case sensitivity) are available. An uncompilable term is treated as non-constraining (skipped within its AND-group), so a partially-typed regex keeps the tree populated instead of blanking it. `pid:`/`ppid:` remain integer equality, `state:` remains single-char equality, and comma/space OR/AND semantics are unchanged.
+- rtop now **restores the previous session by default** (search query, pane focus, paused state, hide-kernel-threads, and the tree cursor's process) from a per-user state file, instead of always starting fresh. Pass `--no-restore` to start fresh and skip saving. A non-empty `--filter` overrides the restored query.
 
 ### Added
-- Matched substrings are painted amber (`SEARCH_MATCH_FG`, RGB 255,176,0) in the visible tree rows — command text, the `[<comm>]` kernel-thread fallback, and the differing-user tag. Highlighting layers correctly with the reverse-video selected row and kernel-thread dimming.
-- A dim "invalid regex" hint appears in the status-line right slot while the query contains an uncompilable regex term. Such a term is treated as non-constraining (skipped within its AND-group), so a partial regex typed mid-keystroke keeps the tree populated instead of blanking it.
+- Session persistence: the search query, pane focus, paused state, hide-kernel-threads flag, and the tree cursor's process are saved to a per-user `state.json` (Linux `~/.local/state/rtop/`, macOS `~/Library/Application Support/rtop/`) and restored on the next launch. The cursor re-anchors by process identity (pid + start time) so it survives PID reuse, falling back to the first match if the process is gone. Writes are atomic and best-effort — a state-file error never disrupts the TUI.
+- `--no-restore` CLI flag: start fresh (query from `--filter` or empty) and do not persist the session.
+- Matched substrings are painted amber (`SEARCH_MATCH_FG`, RGB 255,176,0) in the visible tree rows — command text, the `[<comm>]` kernel-thread fallback, wrapped continuation lines, and the differing-user tag. Highlighting layers correctly with the reverse-video selected row and kernel-thread dimming.
+- A dim "invalid regex" hint appears in the status-line right slot while the query contains an uncompilable regex term (a transient kill-error flash still takes precedence).
+
+### Fixed
+- Status-line left stats (focus/counts/load/mem) and the right-aligned hint/flash now render in disjoint lanes and never overlap. Previously, at narrower widths the right-aligned hint could clobber the `mem:`/`load:` figures; now the hint truncates or vanishes into its own lane instead of overwriting the stats.
 
 ## [0.2.1] - 2026-05-21
 
