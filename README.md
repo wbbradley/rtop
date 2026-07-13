@@ -13,7 +13,8 @@ Early development; see [PLAN.md](PLAN.md) for roadmap.
 - **Match-driven tree**: every matching process is shown together with its full parent chain (root → match) and its complete subtree, with matched substrings highlighted in amber. Multiple disjoint matches become separate roots; empty query shows the full forest. Tree cursor navigates with `j`/`k`/`gg`/`G`/Ctrl-d/Ctrl-u; `Enter` drills into a PID.
 - **Signal sending**: press `K` in the tree to open the signal modal (TERM/KILL/HUP/INT/USR1/USR2/STOP/CONT). Confirms PID 1 and self-signal.
 - **Pause** sampling with `space`; resume with `space`.
-- **CLI flags**: `--filter <expr>` pre-populates the search box; `--interval <secs>` overrides sample interval; `--no-kernel-threads` hides kernel threads.
+- **Session persistence**: the search query, pane focus, paused state, hide-kernel-threads, and the tree cursor's process are saved to a per-user state file and restored on the next launch, so a restart resumes where you left off. `--no-restore` starts fresh (and does not save).
+- **CLI flags**: `--filter <expr>` pre-populates the search box (overrides the restored query); `--interval <secs>` overrides sample interval; `--no-kernel-threads` hides kernel threads; `--no-restore` skips session restore.
 - **Cross-platform**: Linux (`procfs`) + macOS (`libproc`/`sysctl`).
 
 ## Screenshot

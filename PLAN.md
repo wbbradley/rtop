@@ -4,7 +4,14 @@ A TUI process monitor in the spirit of `top`/`htop`, with vim-style navigation, 
 
 ## Next Up
 
-_No queued tasks._
+### Status line: left stats and right hint overlap at narrow widths
+
+The status line renders the left paragraph (`[focus]  N/M procs  [paused]   load: … mem: …`)
+and the right-aligned hint into the **same** `area` (`src/ui/status_line.rs:18-43`), drawing
+the hint second. When their combined width exceeds the terminal, the hint overwrites the tail
+of the left stats — around 120 cols the `mem:` figure disappears. Split the status-line rect
+into two width-constrained halves (or truncate/hide the hint when space is tight) so the
+load/mem stats are never clobbered. Discovered while verifying session persistence.
 
 ## Architecture Reference
 
@@ -80,6 +87,7 @@ src/
   source/linux.rs           — procfs-backed source (Phase 1)
   source/macos.rs           — libproc-backed source (Phase 6)
   sampler.rs                — sampler thread driver
+  persist.rs                — session-state load/save (serde boundary)
   search.rs
   search/parser.rs          — DSL → Query AST
   search/filter.rs          — Query + Snapshot → filtered indices
@@ -147,14 +155,21 @@ No magic numbers anywhere. All tunables live in `consts.rs`:
 ### CLI flags (clap, derive)
 
 - `--interval <secs>` overrides `SAMPLE_INTERVAL`.
-- `--filter <expr>` pre-populates search box.
+- `--filter <expr>` pre-populates search box (a non-empty value overrides the
+  restored session query for this run).
 - `--no-kernel-threads` starts with kernel threads hidden.
+- `--no-restore` does not restore the persisted session and does not save on
+  exit (fully ephemeral run).
 - `--version`, `--help`.
+
+Session state (search query, focus, paused, hide-kernel-threads, and the tree
+cursor anchor) is persisted to a per-user JSON state file
+(`state.json` under the OS state/data dir) and restored on the next launch.
 
 ### Crates
 
-`ratatui`, `crossterm`, `procfs` (Linux), `libproc` + `libc` (macOS, Phase 6), `crossbeam-channel`, `clap` (derive), `nix` for `kill(2)`. All added via `cargo add`.
+`ratatui`, `crossterm`, `procfs` (Linux), `libproc` + `libc` (macOS, Phase 6), `crossbeam-channel`, `clap` (derive), `nix` for `kill(2)`, `directories` (state-file location), `serde` (derive) + `serde_json` (state serialization). All added via `cargo add`.
 
 ### Out of v1 scope
 
-Threads, renice, kill-tree, multi-select, `cwd:` filter, search negation, manual h/l fold ops in tree, runtime pane resize, config file, theming.
+Threads, renice, kill-tree, multi-select, `cwd:` filter, search negation, manual h/l fold ops in tree, runtime pane resize, a user-editable *config* file (runtime *state* persistence is now in scope; see the CLI section), theming.

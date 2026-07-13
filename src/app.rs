@@ -1,12 +1,13 @@
 use std::{sync::Arc, thread};
 
 use anyhow::Context;
-use crossbeam_channel::{Receiver, Sender, bounded, select};
+use crossbeam_channel::{Receiver, Sender, bounded, select, tick};
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::DefaultTerminal;
 
 use crate::{
-    consts::{EVENT_CHANNEL_CAP, TREE_HALF_PAGE},
+    consts::{EVENT_CHANNEL_CAP, STATE_SAVE_INTERVAL, TREE_HALF_PAGE},
+    persist::{self, PersistedState},
     process::Snapshot,
     ui,
 };
@@ -19,16 +20,11 @@ use state::{App, SignalModal};
 
 pub fn run(
     snapshot_rx: Receiver<Arc<Snapshot>>,
-    initial_filter: String,
-    hide_kernel_threads: bool,
+    boot: PersistedState,
+    persist_enabled: bool,
 ) -> anyhow::Result<()> {
     let mut terminal = ratatui::try_init().context("failed to initialize terminal")?;
-    let result = run_loop(
-        &mut terminal,
-        snapshot_rx,
-        initial_filter,
-        hide_kernel_threads,
-    );
+    let result = run_loop(&mut terminal, snapshot_rx, boot, persist_enabled);
     ratatui::restore();
     result
 }
@@ -36,13 +32,18 @@ pub fn run(
 fn run_loop(
     terminal: &mut DefaultTerminal,
     snapshot_rx: Receiver<Arc<Snapshot>>,
-    initial_filter: String,
-    hide_kernel_threads: bool,
+    boot: PersistedState,
+    persist_enabled: bool,
 ) -> anyhow::Result<()> {
     let (event_tx, event_rx) = bounded::<Event>(EVENT_CHANNEL_CAP);
     spawn_event_thread(event_tx);
 
-    let mut app = App::new(initial_filter, hide_kernel_threads);
+    let mut app = App::from_boot(boot);
+    // Baseline for change-detected saves: what is currently on disk. Only writes
+    // once the session diverges from it (e.g. the cursor anchors on the first
+    // snapshot, or the user edits the query / toggles a view flag).
+    let mut last_saved = Some(app.persisted_state());
+    let save_tick = tick(STATE_SAVE_INTERVAL);
 
     loop {
         app.ensure_tree_built();
@@ -62,17 +63,36 @@ fn run_loop(
             },
             recv(snapshot_rx) -> snap => match snap {
                 Ok(s) => {
-                    if !app.paused {
+                    if app.should_accept_snapshot() {
                         app.latest = Some(s);
                         app.refilter();
                     }
                 }
                 Err(_) => break,
             },
+            recv(save_tick) -> _ => maybe_save(&app, &mut last_saved, persist_enabled),
         }
     }
 
+    // Final flush on any exit path (quit or a disconnected channel).
+    maybe_save(&app, &mut last_saved, persist_enabled);
     Ok(())
+}
+
+/// Persist the session if it changed since the last write. A no-op when
+/// persistence is disabled (`--no-restore` runs are fully ephemeral). Best-effort:
+/// any IO error is ignored (it never touches the terminal, so raw mode stays
+/// intact).
+fn maybe_save(app: &App, last_saved: &mut Option<PersistedState>, persist_enabled: bool) {
+    if !persist_enabled {
+        return;
+    }
+    let current = app.persisted_state();
+    if last_saved.as_ref() == Some(&current) {
+        return;
+    }
+    let _ = persist::save(&current);
+    *last_saved = Some(current);
 }
 
 fn spawn_event_thread(tx: Sender<Event>) {

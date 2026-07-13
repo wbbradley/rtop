@@ -21,6 +21,11 @@ pub const ERROR_FLASH_DURATION: Duration = Duration::from_secs(3);
 pub const CPU_WARN_PCT: f32 = 50.0;
 pub const CPU_DANGER_PCT: f32 = 80.0;
 pub const EVENT_CHANNEL_CAP: usize = 64;
+/// How often the interactive session state is flushed to disk while running.
+/// Writes are debounced: a flush only happens when the persisted state changed.
+pub const STATE_SAVE_INTERVAL: Duration = Duration::from_secs(3);
+/// File name of the per-user session-state file inside the rtop state/data dir.
+pub const STATE_FILE_NAME: &str = "state.json";
 pub const MACOS_ARGMAX_FALLBACK: usize = 256 * 1024;
 pub const KERNEL_THREAD_PARENT_PID: i32 = 2;
 pub const FOCUS_ACCENT: Color = Color::Rgb(254, 128, 25);

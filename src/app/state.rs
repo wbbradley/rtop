@@ -3,6 +3,7 @@ use std::{collections::HashSet, sync::Arc, time::Instant};
 use crate::{
     app::event::Focus,
     consts::{ERROR_FLASH_DURATION, SCROLLOFF},
+    persist::PersistedState,
     process::{ProcessId, Snapshot},
     search::{CompiledQuery, Query, matches, parse},
     tree::{TreeNode, build_filtered, build_parent_to_children, build_pid_to_idx},
@@ -44,6 +45,9 @@ pub struct App {
     /// ProcessId currently under the tree cursor — used to re-anchor across
     /// rebuilds when the same PID is still visible.
     pub tree_cursor_id: Option<ProcessId>,
+    /// A restored cursor anchor awaiting the first snapshot-backed tree build.
+    /// Consumed (taken) on that build, then the live `tree_cursor_id` takes over.
+    pub pending_cursor_id: Option<ProcessId>,
 
     pub help_open: bool,
     pub signal_modal: Option<SignalModal>,
@@ -89,17 +93,32 @@ pub fn flash_active(flash: &Option<(String, Instant)>, now: Instant) -> Option<&
 }
 
 impl App {
+    /// Test-only convenience constructor. Production code builds via
+    /// [`App::from_boot`] with a resolved [`PersistedState`].
+    #[cfg(test)]
     pub fn new(initial_filter: String, hide_kernel_threads: bool) -> Self {
-        let query = parse(&initial_filter);
+        Self::from_boot(PersistedState {
+            query_text: initial_filter,
+            hide_kernel_threads,
+            ..PersistedState::default()
+        })
+    }
+
+    /// Build the app from a resolved boot/session state. Ephemeral and derived
+    /// fields start empty; the restored cursor anchor is held in
+    /// `pending_cursor_id` until the first snapshot-backed tree build.
+    pub fn from_boot(boot: PersistedState) -> Self {
+        let query = parse(&boot.query_text);
         let compiled = CompiledQuery::compile(&query);
+        let pending_cursor_id = boot.cursor_id();
         Self {
             latest: None,
             quit: false,
-            focus: Focus::Search,
-            query_text: initial_filter,
+            focus: boot.focus.into(),
+            query_text: boot.query_text,
             query,
             compiled,
-            paused: false,
+            paused: boot.paused,
             matched_pids: HashSet::new(),
             pending_g: false,
             tree_visible: Vec::new(),
@@ -107,11 +126,32 @@ impl App {
             tree_offset: 0,
             tree_cache_key: None,
             tree_cursor_id: None,
+            pending_cursor_id,
             help_open: false,
             signal_modal: None,
             flash: None,
-            hide_kernel_threads,
+            hide_kernel_threads: boot.hide_kernel_threads,
         }
+    }
+
+    /// Snapshot the user-facing session fields for persistence. Reads the live
+    /// cursor anchor (`tree_cursor_id`) so a moved cursor is captured.
+    pub fn persisted_state(&self) -> PersistedState {
+        PersistedState {
+            query_text: self.query_text.clone(),
+            focus: self.focus.into(),
+            paused: self.paused,
+            hide_kernel_threads: self.hide_kernel_threads,
+            cursor_pid: self.tree_cursor_id.map(|id| id.pid),
+            cursor_start_time: self.tree_cursor_id.map(|id| id.start_time),
+        }
+    }
+
+    /// Whether an incoming snapshot should populate the view. Normally gated by
+    /// pause, but the very first snapshot is always accepted so a session
+    /// restored as paused still has something to display.
+    pub fn should_accept_snapshot(&self) -> bool {
+        !self.paused || self.latest.is_none()
     }
 
     pub fn set_flash(&mut self, msg: impl Into<String>) {
@@ -200,8 +240,11 @@ impl App {
         }
 
         // Preserve cursor by ProcessId when possible; otherwise jump to the
-        // first matched node (or row 0 if none).
-        let new_cursor = if let Some(prev_id) = self.tree_cursor_id
+        // first matched node (or row 0 if none). On the first snapshot-backed
+        // build after a restore, the pending restored anchor stands in for the
+        // (not-yet-set) live cursor id.
+        let anchor = self.tree_cursor_id.or(self.pending_cursor_id.take());
+        let new_cursor = if let Some(prev_id) = anchor
             && let Some(pos) = self
                 .tree_visible
                 .iter()
@@ -483,5 +526,112 @@ mod tests {
         app.refilter();
         app.ensure_tree_built();
         assert_eq!(app.tree_visible.len(), 4);
+    }
+
+    #[test]
+    fn from_boot_restores_focus_paused_query() {
+        let boot = PersistedState {
+            query_text: "name:foo".to_string(),
+            focus: crate::persist::PersistedFocus::Tree,
+            paused: true,
+            hide_kernel_threads: true,
+            cursor_pid: Some(3),
+            cursor_start_time: Some(3),
+        };
+        let app = App::from_boot(boot);
+        assert_eq!(app.query_text, "name:foo");
+        assert_eq!(app.focus, Focus::Tree);
+        assert!(app.paused);
+        assert!(app.hide_kernel_threads);
+        assert_eq!(
+            app.pending_cursor_id,
+            Some(ProcessId {
+                pid: 3,
+                start_time: 3
+            })
+        );
+        // Live cursor id is not set until the first snapshot-backed build.
+        assert_eq!(app.tree_cursor_id, None);
+    }
+
+    #[test]
+    fn restore_places_cursor_on_pending_anchor_if_alive() {
+        // snap() has pids 1..=4 with start_time == pid; anchor pid 4 is alive.
+        let boot = PersistedState {
+            cursor_pid: Some(4),
+            cursor_start_time: Some(4),
+            ..PersistedState::default()
+        };
+        let mut app = App::from_boot(boot);
+        let s = snap();
+        app.latest = Some(s.clone());
+        app.refilter();
+        app.ensure_tree_built();
+        assert_eq!(cursor_pid(&app), 4);
+        // Pending anchor consumed; live cursor id now tracks pid 4.
+        assert_eq!(app.pending_cursor_id, None);
+        assert_eq!(
+            app.tree_cursor_id,
+            Some(ProcessId {
+                pid: 4,
+                start_time: 4
+            })
+        );
+    }
+
+    #[test]
+    fn restore_cursor_falls_back_when_process_gone() {
+        // Anchor references a process not present in the snapshot.
+        let boot = PersistedState {
+            cursor_pid: Some(999),
+            cursor_start_time: Some(999),
+            ..PersistedState::default()
+        };
+        let mut app = App::from_boot(boot);
+        let s = snap();
+        app.latest = Some(s.clone());
+        app.refilter();
+        app.ensure_tree_built();
+        // Empty query → no matches → falls back to row 0 (pid 1, the root).
+        assert_eq!(cursor_pid(&app), 1);
+        assert_eq!(app.pending_cursor_id, None);
+    }
+
+    #[test]
+    fn should_accept_snapshot_first_even_when_paused() {
+        let boot = PersistedState {
+            paused: true,
+            ..PersistedState::default()
+        };
+        let mut app = App::from_boot(boot);
+        // No snapshot yet: accept the first regardless of pause.
+        assert!(app.should_accept_snapshot());
+        app.latest = Some(snap());
+        // Subsequent snapshots honor pause.
+        assert!(!app.should_accept_snapshot());
+        app.paused = false;
+        assert!(app.should_accept_snapshot());
+    }
+
+    #[test]
+    fn persisted_state_captures_cursor_after_build() {
+        let mut app = App::new(String::new(), false);
+        let s = snap();
+        app.latest = Some(s.clone());
+        app.refilter();
+        app.ensure_tree_built();
+        let pos4 = app
+            .tree_visible
+            .iter()
+            .position(|n| s.processes[n.proc_idx].id.pid == 4)
+            .unwrap();
+        app.tree_cursor = pos4;
+        app.tree_cursor_id = Some(s.processes[app.tree_visible[pos4].proc_idx].id);
+
+        let ps = app.persisted_state();
+        assert_eq!(ps.cursor_pid, Some(4));
+        assert_eq!(ps.cursor_start_time, Some(4));
+        assert_eq!(ps.query_text, "");
+        assert_eq!(ps.focus, crate::persist::PersistedFocus::Search);
     }
 }

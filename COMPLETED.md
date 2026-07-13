@@ -287,3 +287,174 @@ Turn the string-valued search terms into regular expressions and paint their mat
 - `src/ui/status_line.rs` — render the dim invalid-regex hint with correct precedence vs. the kill-error flash.
 - Docs: `PLAN.md` Search DSL section and Visual rules (note the second truecolor); `README.md` ("substring search DSL" → regex); optionally the help modal (`src/ui/help_modal.rs`).
 ````
+
+## Persist session state on quit and restore it on boot
+
+Added best-effort persistence of the interactive session to a per-user JSON state file,
+restored on the next launch so a restart resumes where the user left off.
+
+- Deps via `cargo add`: `directories`, `serde` (derive), `serde_json`.
+- `src/persist.rs` (new, serde boundary): `PersistedState` (primitive fields —
+  `query_text`, `paused`, `hide_kernel_threads`, `cursor_pid`/`cursor_start_time`, and
+  `focus` as a dedicated `PersistedFocus` enum), with `From` conversions so the domain
+  `Focus`/`ProcessId` stay serde-free. `state_file_path()` uses
+  `ProjectDirs::from("","","rtop")` → `state_dir()` (Linux `~/.local/state/rtop/`) else
+  `data_dir()` (macOS `~/Library/Application Support/rtop/`), file `state.json`. `load()`
+  returns default on any error (missing/corrupt/unreadable). `save()` writes a sibling
+  `state.tmp` + `sync_all` + atomic `rename`. `resolve_boot()` is a pure precedence resolver
+  (`--no-restore` → defaults; non-empty `--filter` overrides the query; `--no-kernel-threads`
+  forces hide).
+- `src/consts.rs`: `STATE_SAVE_INTERVAL` (3s, debounced) and `STATE_FILE_NAME`.
+- `src/app/state.rs`: `App::from_boot(PersistedState)` (the production constructor; `App::new`
+  is now `#[cfg(test)]`), `persisted_state()` (snapshots the persisted fields from live
+  state), `should_accept_snapshot()` (`!paused || latest.is_none()` — the first snapshot is
+  always accepted so a restored-paused session still populates), and a new
+  `pending_cursor_id` field holding the restored cursor anchor until the first
+  snapshot-backed tree build, where `ensure_tree_built` folds it into the existing
+  re-anchor-by-`ProcessId` logic (falls back to first match / row 0 if the process is gone).
+- `src/app.rs`: `run`/`run_loop` take the resolved `boot` state plus a `persist_enabled`
+  flag; a `crossbeam_channel::tick(STATE_SAVE_INTERVAL)` arm plus a final flush on every exit
+  path save via change-detection (`maybe_save` compares `persisted_state()` to the last
+  written value rather than a hand-maintained dirty flag — strictly more robust, can't miss a
+  mutation site). Snapshot arm now gated by `should_accept_snapshot()`.
+- `src/main.rs`: `mod persist`; `--filter` is now `Option<String>`; new `--no-restore` flag;
+  loads + resolves boot state before raw mode and passes it (and `!no_restore`) into `run`.
+
+Deviations from the spec, all deliberate:
+- **Change-detection instead of a dirty flag.** `maybe_save` diffs the current
+  `persisted_state()` against the last-saved value, which satisfies "save only when changed"
+  without sprinkling `dirty = true` across ~10 mutation sites (and never misses one).
+- **`--no-restore` is fully ephemeral (skips load AND save).** Because the tree cursor
+  auto-anchors on the first snapshot, a do-nothing session always diverges from its boot
+  baseline; if `--no-restore` still saved, a throwaway run would overwrite the user's saved
+  query with an empty one. Skipping the save honors "behave exactly as today" and avoids that
+  footgun.
+- **Explicit empty `--filter ""` keeps the restored query** (only a non-empty `--filter`
+  overrides), per the spec's "a non-empty `--filter` wins" wording.
+
+Tests: 21 new unit tests (persist round-trip; decode corrupt/empty/partial → default;
+`load_from` missing → default; `save`→`load_from` round trip incl. rename-over-existing;
+`resolve_boot` precedence matrix; `Focus`↔`PersistedFocus`; `from_boot` field restore;
+pending-anchor placement alive→placed and gone→fallback; `should_accept_snapshot`;
+`persisted_state` cursor capture). Verified end-to-end by driving the real TUI through a PTY:
+query+focus+cursor persist across restart, do-nothing restore preserves state, `--no-restore`
+does not touch the file, `--filter` overrides the restored query, a corrupt file is ignored
+without aborting startup, and a restored-paused session still populates on the first snapshot.
+`cargo fmt` + `cargo clippy --all-targets -D warnings` clean; `cargo test` green (125 tests).
+
+Discovered follow-up (added to Next Up): the status line's left stats and right-aligned hint
+render into the same rect, so the `mem:` stats get overwritten by the hint at ~120 cols.
+
+### Original PLAN.md entry (verbatim, before work began)
+
+### Persist session state on quit and restore it on boot
+
+rtop starts fresh every run. Add best-effort persistence of the interactive session — the
+search query plus view state — to a per-user state file, written periodically and on quit,
+and restored on startup so a restart resumes where the user left off. This is runtime
+**state**, distinct from a user-editable config file (still out of scope).
+
+**What to persist (full session).** Only fields that are user-facing and meaningful across a
+restart. `query_text` is the canonical search field — `query`/`compiled` are re-derived from
+it by `App::new`/`refilter`, so store only the raw string.
+
+- `query_text: String` (`src/app/state.rs:23`) — the search query.
+- `focus: Focus` (`:22`) — Search vs Tree pane.
+- `paused: bool` (`:29`).
+- `hide_kernel_threads: bool` (`:52`).
+- Tree cursor anchor: the `ProcessId` (`pid` + `start_time`) under the cursor
+  (`tree_cursor_id`, `:46`), stored as primitives; best-effort re-anchor on first snapshot.
+
+Do **not** persist derived/ephemeral fields: `latest`, `quit`, `query`, `compiled`,
+`matched_pids`, `pending_g`, `tree_visible`/`tree_cursor`/`tree_offset`/`tree_cache_key`,
+`help_open`, `signal_modal`, `flash`. The refresh `interval` is a CLI arg, not in `App`
+state (`src/main.rs:24`, `src/sampler.rs`) — out of scope.
+
+**State file.**
+
+- Location via the `directories` crate (`cargo add directories`):
+  `ProjectDirs::from("", "", "rtop")`; use `state_dir()` when present (Linux
+  `~/.local/state/rtop/`), else fall back to `data_dir()` (macOS
+  `~/Library/Application Support/rtop/`). File name `state.json`. Create the parent dir if
+  needed. rtop targets both macOS and Linux (`src/source/macos.rs`, `src/source/linux.rs`).
+- Format: JSON via `serde` + `serde_json` (`cargo add serde --features derive`,
+  `cargo add serde_json`). Define a dedicated `PersistedState` struct of **primitive** fields
+  (String, bools, `Option<i32>`/`Option<u64>` for the cursor pid/start_time, `focus` as a
+  small `Serialize`/`Deserialize` enum or a bool). Do not add serde derives to the domain
+  types `ProcessId` (`src/process.rs`) or `Focus` (`src/app/event.rs`); convert at the module
+  boundary.
+- New module `src/persist.rs` (`module.rs` layout, not `mod.rs`) exposing
+  `load() -> PersistedState` (returns default on **any** error) and
+  `save(&PersistedState)` (write to a temp file in the same dir, then rename → atomic).
+  Both are best-effort: never panic, never abort startup or shutdown. Missing file →
+  defaults; corrupt/unreadable → ignore (optionally a dim status flash) and continue. Do all
+  path/IO **before or outside raw mode** so a state-file failure can never corrupt the
+  terminal (mirror the "surface source errors before raw mode" discipline at
+  `src/main.rs:40-44`).
+
+**Boot precedence.**
+
+- `--no-restore` (new bool flag on `Cli`, `src/main.rs:20-34`): skip loading entirely;
+  behave exactly as today (query from `--filter` or empty, default toggles).
+- Change `--filter` from `default_value = ""` to `Option<String>` so "absent" is
+  distinguishable from an explicit value. A non-empty `--filter` wins for the query;
+  otherwise the restored query applies.
+- The existing `--no-kernel-threads` flag forces hide = true when passed; otherwise use the
+  restored value.
+- Wire the resolved values into `App::new` (`src/app/state.rs:91-115`) — extend it, or add a
+  constructor that also accepts `focus`, `paused`, and the restored cursor anchor. Reconcile
+  these in `main()`/`app::run` (`src/main.rs:47-48`, `src/app.rs:20-45`), keeping load/IO out
+  of the TUI loop.
+
+**Restore edge cases (must handle).**
+
+- **Paused restore.** `run_loop` only updates `latest`/`refilter` when `!app.paused`
+  (`src/app.rs:63-69`). If restored `paused == true`, the view would never populate. Ensure
+  the **first** snapshot always populates `latest` (e.g. accept it when `latest.is_none()`
+  regardless of pause), then honor pause thereafter.
+- **Cursor anchor.** `ensure_tree_built` nulls `tree_cursor_id` on its no-snapshot early
+  return (`src/app/state.rs:164-172`) and re-anchors by matching the full `ProcessId`
+  (pid + start_time, robust vs PID reuse) at `:204-219`. The restored anchor must survive
+  until the first snapshot-backed build — hold it in a separate "pending anchor" field
+  applied on the first build (or guard the null-out), then let the existing re-anchor logic
+  place the cursor; fall back to first-match / row 0 if the process is gone.
+
+**Save timing (periodic + on quit).**
+
+- Add a periodic tick to the `select!` in `run_loop` (`src/app.rs:57-72`) via
+  `crossbeam_channel::tick(STATE_SAVE_INTERVAL)`; on tick, if persisted state changed since
+  the last write, save. Track a dirty flag set wherever a persisted field mutates: query
+  edits (`src/app.rs:123,128,132,176,185`), pause toggle (`:172`), focus changes
+  (`:134,136,179,181`), cursor moves (`update_tree_cursor_id`, `g`/`G` at `:154-168`).
+- On the quit/`break` path (`src/app.rs:53-55`, and the channel-disconnect breaks), do a
+  final save.
+- Add `STATE_SAVE_INTERVAL` (a few seconds; debounce) to `src/consts.rs` — no magic literals
+  (per the discipline note at PLAN.md "Constants").
+- Note: a panic bypasses this save (`install_panic_hook`, `src/main.rs:51-58`, never touches
+  `App`); periodic saving makes best-effort loss acceptable. Concurrent rtop instances
+  writing the same file: last-writer-wins is acceptable.
+
+**Docs.** Update the "Out of v1 scope" line (PLAN.md:160) so "config file" reads as the
+user-editable *config* remaining out of scope while runtime *state* persistence is now in
+scope; add the state file and `--no-restore` to the CLI (PLAN.md:148-152) and Crates
+(PLAN.md:154-156) reference sections.
+
+**Done when.**
+
+- A fresh run with no state file behaves exactly as today.
+- After typing a query, moving the cursor, and toggling pause / hide-kernel-threads, quitting
+  and relaunching restores: the query (search re-filters identically), pane focus, paused,
+  hide-kernel-threads, and the cursor re-anchors to the same process if still alive (else
+  first match / top).
+- A non-empty `--filter` overrides the restored query; `--no-restore` starts fresh.
+- A corrupt / missing / unreadable state file never aborts startup or shutdown, and a
+  state-file error never leaves the terminal in raw mode.
+- State is written atomically (temp + rename) both periodically and on quit.
+- Unit tests cover: `persist` round-trip (serialize → deserialize equals original); `load`
+  returns default on missing and on corrupt input; the boot-precedence resolver (`--filter`
+  vs restored vs `--no-restore`, and `--no-kernel-threads` vs restored); "first snapshot
+  populates even when restored paused"; and cursor re-anchor by `ProcessId` after restore
+  (extend the existing `tree_cursor_preserved_if_pid_visible` pattern in
+  `src/app/state.rs`).
+- `chk` clean (fmt + clippy `-D warnings`); `cargo test` green. New deps added via
+  `cargo add`.

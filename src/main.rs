@@ -7,6 +7,7 @@ use crossterm::ExecutableCommand;
 mod app;
 mod consts;
 mod format;
+mod persist;
 mod process;
 mod sampler;
 mod search;
@@ -24,18 +25,34 @@ struct Cli {
     #[arg(long, default_value_t = consts::SAMPLE_INTERVAL.as_secs_f64())]
     interval: f64,
 
-    /// Pre-populate the search box with this expression.
-    #[arg(long, default_value = "")]
-    filter: String,
+    /// Pre-populate the search box with this expression. A non-empty value
+    /// overrides any restored session query for this run.
+    #[arg(long)]
+    filter: Option<String>,
 
     /// Hide kernel threads from the load view.
     #[arg(long)]
     no_kernel_threads: bool,
+
+    /// Do not restore the persisted session; start fresh (query from --filter
+    /// or empty, default view toggles).
+    #[arg(long)]
+    no_restore: bool,
 }
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let interval = Duration::from_secs_f64(cli.interval);
+
+    // Load persisted session state and resolve boot precedence BEFORE raw mode,
+    // so a state-file failure can never leave the terminal in a bad state.
+    // `--no-restore` skips reading the file entirely.
+    let restored = if cli.no_restore {
+        persist::PersistedState::default()
+    } else {
+        persist::load()
+    };
+    let boot = persist::resolve_boot(restored, cli.no_restore, cli.filter, cli.no_kernel_threads);
 
     // Construct platform source FIRST — any /proc readability error surfaces here,
     // BEFORE raw mode.
@@ -45,7 +62,7 @@ fn main() -> anyhow::Result<()> {
     install_panic_hook();
 
     let rx = sampler::spawn(source, interval);
-    app::run(rx, cli.filter, cli.no_kernel_threads)
+    app::run(rx, boot, !cli.no_restore)
 }
 
 fn install_panic_hook() {
