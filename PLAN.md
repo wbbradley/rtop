@@ -110,12 +110,21 @@ No magic numbers anywhere. All tunables live in `consts.rs`:
 | Context | Key | Action |
 |---|---|---|
 | any | `Ctrl-C` | quit |
-| any | `?` | open help modal |
+| any | `F1` | open help modal |
+| tree | `?` | open help modal |
 | tree | `Tab` / `Shift-Tab` / `Esc` | focus search |
 | search | `Tab` / `Shift-Tab` | focus tree |
 | search | `Esc` | clear query (stay in search) |
 | search | `Ctrl-n` / `Ctrl-p` | move tree cursor without leaving search |
 | search | `Enter` | focus tree, jump cursor to first match |
+| search | `Left`/`Right`, `Ctrl-b`/`Ctrl-f` | move cursor by char |
+| search | `Alt-b`/`Alt-f`, `Ctrl-Left`/`Ctrl-Right` | move cursor by word |
+| search | `Home`/`Ctrl-a`, `End`/`Ctrl-e` | cursor to start / end |
+| search | `Backspace` / `Delete` | delete char before / after cursor |
+| search | `Ctrl-w` | delete word before cursor |
+| search | `Ctrl-k` / `Ctrl-u` | kill to end / start of line |
+| search | `Ctrl-y` | yank last kill |
+| search | printable (incl. `?`) | insert at cursor |
 | tree | `j`/`k`/`gg`/`G` | navigate cursor (DFS order); scrolloff=`SCROLLOFF` |
 | tree | `Ctrl-d`/`Ctrl-u` | half-page viewport scroll (`TREE_HALF_PAGE`) |
 | tree | `Enter` | commit `pid:<X>` to search (drill) |

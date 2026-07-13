@@ -56,6 +56,11 @@ impl From<PersistedFocus> for Focus {
 pub struct PersistedState {
     /// Canonical search query; `query`/`compiled` are re-derived from it.
     pub query_text: String,
+    /// Caret position (codepoint index) within `query_text`. `None` in older
+    /// state files that predate cursor persistence; those restore with the
+    /// caret at the end of the query. Kept as a plain `Option<usize>` so the
+    /// persisted schema stays explicit (no `tui-input` serde feature).
+    pub query_cursor: Option<usize>,
     pub focus: PersistedFocus,
     pub paused: bool,
     pub hide_kernel_threads: bool,
@@ -93,6 +98,9 @@ pub fn resolve_boot(
     };
     if let Some(f) = filter.filter(|s| !s.is_empty()) {
         resolved.query_text = f;
+        // The CLI-provided filter is a fresh query; drop any restored caret so
+        // it lands at the end of the new text.
+        resolved.query_cursor = None;
     }
     if force_hide_kernel_threads {
         resolved.hide_kernel_threads = true;
@@ -162,6 +170,7 @@ mod tests {
     fn sample() -> PersistedState {
         PersistedState {
             query_text: "cmd:fire user:root".to_string(),
+            query_cursor: Some(7),
             focus: PersistedFocus::Tree,
             paused: true,
             hide_kernel_threads: true,
@@ -200,6 +209,7 @@ mod tests {
         // serde(default) → missing fields fall back to defaults, not an error.
         let s = decode(br#"{"query_text":"foo"}"#);
         assert_eq!(s.query_text, "foo");
+        assert_eq!(s.query_cursor, None);
         assert_eq!(s.focus, PersistedFocus::Search);
         assert!(!s.paused);
         assert_eq!(s.cursor_pid, None);
@@ -269,6 +279,8 @@ mod tests {
         let restored = sample();
         let boot = resolve_boot(restored, false, Some("name:zsh".to_string()), false);
         assert_eq!(boot.query_text, "name:zsh");
+        // The CLI filter resets the caret so it lands at end of the new text.
+        assert_eq!(boot.query_cursor, None);
         // Other restored fields survive.
         assert_eq!(boot.focus, PersistedFocus::Tree);
         assert!(boot.paused);
@@ -309,6 +321,7 @@ mod tests {
         // --no-restore starts fresh but still honors CLI query/toggles.
         let boot = resolve_boot(sample(), true, Some("pid:1".to_string()), true);
         assert_eq!(boot.query_text, "pid:1");
+        assert_eq!(boot.query_cursor, None);
         assert!(boot.hide_kernel_threads);
         assert_eq!(boot.focus, PersistedFocus::Search);
         assert!(!boot.paused);

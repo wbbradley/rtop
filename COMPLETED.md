@@ -487,3 +487,74 @@ Original PLAN.md entry (verbatim):
 > of the left stats — around 120 cols the `mem:` figure disappears. Split the status-line rect
 > into two width-constrained halves (or truncate/hide the hint when space is tight) so the
 > load/mem stats are never clobbered. Discovered while verifying session persistence.
+
+## Rich search-box editing via `tui-input`
+
+Replaced the append/backspace-only search input with a full single-line editing model
+backed by the `tui-input` crate (0.15.3, default `ratatui-crossterm` feature; verified a
+single `crossterm 0.29.0` in the tree so the `Event` types unify).
+
+- `src/app/state.rs`: `App.query_text: String` → `query_input: tui_input::Input`. Added
+  `query_str()` accessor, `set_query()` (fresh `Input`, caret at end), and
+  `query_kill_to_start()` (readline Ctrl-u: keep cursor→end, caret to 0). `refilter`, the
+  `ensure_tree_built` cache key, and `persisted_state` all read through `query_str()`.
+- `src/app.rs` `handle_search_key`: intercept the reserved keys (`Ctrl-n`/`Ctrl-p` tree
+  nudge, `Tab`/`BackTab`/`Enter` focus, `Esc` clear) plus `Ctrl-u` (remapped to kill-to-start;
+  the crate's native `Ctrl-u` is whole-line) and `Alt-b`/`Alt-f` word motion — the crate maps
+  word motion under `META` but crossterm reports Alt as `ALT`, so those two issue
+  `InputRequest::GoTo{Prev,Next}Word` directly. Everything else (printable incl. `?`, char
+  motion, `Home`/`End`, `Backspace`/`Delete`, `Ctrl-w`, `Ctrl-k`, `Ctrl-y`, `Ctrl-Left/Right`)
+  delegates to `Input::handle_event`; `refilter()` runs only when the value actually changed.
+- `src/app.rs` `handle_key`: `F1` opens help from any context; `?` opens help only when focus
+  is not the search box (search-focused `?` types a literal `?`); `F1`/`Esc`/`?` all close it.
+- `src/ui/search_box.rs`: dropped the `chars().count()` scroll math for
+  `input.visual_scroll(inner_w - 1)` + `input.visual_cursor()` (Unicode-width correct),
+  reserving the final inner column for the caret so it never slides under the border. Prefix
+  highlighting is unchanged (`highlight(app.query_str())`).
+- `src/persist.rs`: added `query_cursor: Option<usize>` to `PersistedState` (`None` in older
+  files → caret restored to end for backward compat; `with_cursor` clamps a stale value). A
+  non-empty `--filter` resets the caret to `None` so it lands at the end of the CLI text.
+- `src/ui/help_modal.rs` + `state::hint_for`: documented the editing keys, `?`-inserts-literally,
+  and F1-for-help; bumped `HELP_MODAL_HEIGHT` 20 → 24 to fit the expanded search section.
+- Tests (150 total, all green; clippy clean; `cargo fmt` applied): editing/nav via the real
+  `handle_search_key`/`handle_key` (mid-string insert, Alt word motion, Ctrl-arrow word motion,
+  Ctrl-w, Ctrl-k, readline Ctrl-u, reserved-key focus/nav, `?`-literal vs help routing, F1
+  open/close); `query_cursor` restore/clamp/persistence round-trip and kill-to-start in
+  `state.rs`; `highlight` spans + `TestBackend` cursor positioning (short + overflow) in
+  `search_box.rs`; `query_cursor` serde + `--filter` caret reset in `persist.rs`; updated the
+  status-line hint-tail assertion to the new `F1 help` text.
+
+Original PLAN.md entry (verbatim):
+
+> ### Rich search-box editing via `tui-input`
+>
+> Replace the append/backspace-only search input with a full single-line editing model backed by the `tui-input` crate. Today `App.query_text: String` (`app/state.rs`) is edited with `push`/`pop` only in `handle_search_key` (`app/event.rs`), the cursor is pinned to end-of-string, and horizontal scroll is hand-computed from `chars().count()` (scalar count, not display width, so wide/combining chars misalign). Users can only append and backspace — no mid-line cursoring, word motions, or line-kill.
+>
+> **Why `tui-input` (the out-of-the-box answer):** it is the standard single-line input model for ratatui, depends on exactly our `ratatui 0.30.0` + `crossterm 0.29.0`, and — crucially — renders nothing itself. It owns only the buffer + cursor, so the bold-cyan DSL-prefix highlighting in `ui/search_box.rs` is preserved verbatim: we keep calling `highlight(input.value())`. The self-rendering `tui-textarea`/`ratatui-textarea` widget draws its own text and would fight that styled-token rendering (and is multi-line overkill); rejected.
+>
+> **Steps**
+>
+> - `cargo add tui-input` (default features → `ratatui-crossterm`, matches our version pins).
+> - `app/state.rs`: change `query_text: String` → `query_input: tui_input::Input`; add a `query_str(&self) -> &str` accessor returning `self.query_input.value()`. Update every reader: `refilter`, the `ensure_tree_built` cache key, and the tree-context assignments in `app/event.rs` (`/` clear, Esc clear, `pid:<X>` drill) — set the value by constructing a fresh `Input` so the caret lands at end.
+> - `app/event.rs` `handle_search_key`: intercept the reserved search keys first — `Ctrl-n`, `Ctrl-p`, `Tab`, `BackTab`, `Esc`, `Enter` — so they keep their focus/nav semantics; then delegate everything else (including printable chars and all editing keys) to `input.handle_event(&Event::Key(k))` and call `refilter()` when it returns `Some(StateChanged)`.
+> - **Ctrl-u = kill-to-start (readline-accurate), handled explicitly.** `tui-input` has no `DeleteTillStart` request (its default Ctrl-u = `DeleteLine`, whole line), so intercept Ctrl-u in `handle_search_key`: keep the substring from the cursor to end, reset the caret to 0 (e.g. rebuild the `Input`). Ctrl-k (kill-to-end) uses the crate's native `DeleteTillEnd`. Note: the crate's yank buffer won't capture a manually-killed prefix, so Ctrl-y after Ctrl-u is a known no-op — acceptable, mention in help if space allows.
+> - **`?` now types literally in the search box; F1 becomes the help trigger.** In `handle_key` (`app/event.rs`), replace the global `?`→help mapping: F1 opens the help modal in any context; `?` opens help only when focus is **not** the search box. When the search box is focused, `?` falls through to `handle_search_key` and `tui-input` inserts it at the cursor. Update `ui/help_modal.rs` and any hint text (`state::hint_for`) accordingly.
+> - `ui/search_box.rs`: render `highlight(app.query_str())` unchanged; replace the manual scroll with `input.visual_scroll(inner_w)` for the `Paragraph::scroll()` offset, and place the cursor at `inner.x + (input.visual_cursor() - scroll)` via `set_cursor_position` (only when focused). Delete the `chars().count()` scroll math and the "cursor = end of string" logic — `visual_scroll`/`visual_cursor` are Unicode-width correct.
+> - **Persist the caret offset too.** Extend the persisted session state (`persist.rs` / `state::persisted_state` / `state::from_boot`) with a `query_cursor` char index alongside the query string; on boot, restore via `tui_input::Input::new(query_text).with_cursor(query_cursor)` clamped to the value length. Keep it backward-compatible with older state files (default the cursor to end when the field is absent). Prefer a plain `usize` field over enabling `tui-input`'s `serde` feature so the persisted schema stays explicit; confirm the exact `Input` constructor/`with_cursor` API during implementation.
+> - Update `ui/help_modal.rs` (and optionally the Search hint) to document the new editing keys, `?`-inserts-literally, and F1-for-help.
+> - No new `consts.rs` tunable is expected (scroll is derived from box width, editing lives in the crate). Add one only if a real magic number appears during implementation.
+>
+> **Out of scope:** bracketed-paste / multi-char paste into the search box (crossterm bracketed-paste events aren't enabled today).
+>
+> **New search-context editing bindings** (all `tui-input` defaults except Ctrl-u, which is remapped as above; none conflict with the existing Tab/Shift-Tab/Esc/Ctrl-n/Ctrl-p/Enter set): Left/Right & Ctrl-b/Ctrl-f (char), Alt-b/Alt-f & Ctrl-Left/Right (word), Home/Ctrl-a & End/Ctrl-e, Backspace & Delete, Ctrl-w (delete word back), Ctrl-k (kill to end), Ctrl-u (kill to start), Ctrl-y (yank last kill).
+>
+> **Acceptance**
+>
+> - Can insert and delete in the middle of the query; the cursor visibly moves and the box scrolls horizontally to keep it in view (Unicode-width correct).
+> - Word motions (Alt-b/f, Ctrl-Left/Right), Home/End, Ctrl-w, Ctrl-k, and readline Ctrl-u (kill-to-start) all behave as specified.
+> - Bold-cyan `pid:`/`user:`/`name:`/etc. prefix highlighting still renders while editing.
+> - `?` types a literal `?` into the query while search-focused; F1 opens help from any context; `?` still opens help from the tree.
+> - All existing search bindings (focus switch, clear, tree-cursor nudge, jump-to-match) still work; on restore, the query **and** caret offset come back.
+> - Unit tests: mid-string insert, word-left/right, delete-word-back, kill-to-end, kill-to-start, that reserved keys still perform focus/nav actions, and that `query_cursor` round-trips through persistence.
+>
+> Commit semantically, e.g. `feat: rich cursor editing in search box via tui-input`.

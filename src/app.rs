@@ -4,6 +4,7 @@ use anyhow::Context;
 use crossbeam_channel::{Receiver, Sender, bounded, select, tick};
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::DefaultTerminal;
+use tui_input::{InputRequest, backend::crossterm::EventHandler};
 
 use crate::{
     consts::{EVENT_CHANNEL_CAP, STATE_SAVE_INTERVAL, TREE_HALF_PAGE},
@@ -115,7 +116,7 @@ fn handle_key(app: &mut App, k: KeyEvent) {
     }
     if app.help_open {
         match k.code {
-            KeyCode::Esc | KeyCode::Char('?') => app.help_open = false,
+            KeyCode::Esc | KeyCode::Char('?') | KeyCode::F(1) => app.help_open = false,
             _ => {}
         }
         return;
@@ -124,7 +125,13 @@ fn handle_key(app: &mut App, k: KeyEvent) {
         handle_signal_modal_key(app, k);
         return;
     }
-    if matches!(k.code, KeyCode::Char('?')) {
+    // F1 opens help from any context. `?` opens help only when not editing the
+    // search box; while search-focused it falls through and types a literal `?`.
+    if matches!(k.code, KeyCode::F(1)) {
+        app.help_open = true;
+        return;
+    }
+    if matches!(k.code, KeyCode::Char('?')) && app.focus != Focus::Search {
         app.help_open = true;
         return;
     }
@@ -136,28 +143,59 @@ fn handle_key(app: &mut App, k: KeyEvent) {
 
 fn handle_search_key(app: &mut App, k: KeyEvent) {
     let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
+    let alt = k.modifiers.contains(KeyModifiers::ALT);
+    // Reserved search keys keep their focus/nav semantics; intercept them before
+    // handing the rest to the `tui-input` editing model.
     match k.code {
-        KeyCode::Char('n') if ctrl => move_tree_cursor(app, 1),
-        KeyCode::Char('p') if ctrl => move_tree_cursor(app, -1),
-        KeyCode::Char(c) if !ctrl => {
-            app.query_text.push(c);
-            app.refilter();
+        KeyCode::Char('n') if ctrl => {
+            move_tree_cursor(app, 1);
+            return;
         }
-        KeyCode::Backspace => {
-            app.query_text.pop();
-            app.refilter();
+        KeyCode::Char('p') if ctrl => {
+            move_tree_cursor(app, -1);
+            return;
+        }
+        // Alt-b/Alt-f word motion. crossterm reports Alt as `ALT`, but tui-input
+        // only maps word motion under `META`, so issue the request directly.
+        // (Ctrl-Left/Ctrl-Right word motion works through delegation.)
+        KeyCode::Char('b') if alt => {
+            app.query_input.handle(InputRequest::GoToPrevWord);
+            return;
+        }
+        KeyCode::Char('f') if alt => {
+            app.query_input.handle(InputRequest::GoToNextWord);
+            return;
+        }
+        KeyCode::Tab | KeyCode::BackTab => {
+            app.focus = Focus::Tree;
+            return;
         }
         KeyCode::Esc => {
-            app.query_text.clear();
+            app.set_query(String::new());
             app.refilter();
+            return;
         }
-        KeyCode::Tab | KeyCode::BackTab => app.focus = Focus::Tree,
         KeyCode::Enter => {
             app.focus = Focus::Tree;
             app.ensure_tree_built();
             app.jump_tree_cursor_to_first_match();
+            return;
+        }
+        // Ctrl-u = readline kill-to-start (the crate's native Ctrl-u kills the
+        // whole line, so it is remapped here).
+        KeyCode::Char('u') if ctrl => {
+            app.query_kill_to_start();
+            app.refilter();
+            return;
         }
         _ => {}
+    }
+    // Everything else — printable chars (including `?`) and all editing keys —
+    // is handled by tui-input. Refilter only when the buffer value changed.
+    if let Some(sc) = app.query_input.handle_event(&Event::Key(k))
+        && sc.value
+    {
+        app.refilter();
     }
 }
 
@@ -192,7 +230,7 @@ fn handle_tree_key(app: &mut App, k: KeyEvent) {
             app.paused = !app.paused;
         }
         KeyCode::Char('/') => {
-            app.query_text.clear();
+            app.set_query(String::new());
             app.focus = Focus::Search;
             app.refilter();
         }
@@ -201,7 +239,7 @@ fn handle_tree_key(app: &mut App, k: KeyEvent) {
         }
         KeyCode::Enter => {
             if let Some(pid) = current_tree_cursor_pid(app) {
-                app.query_text = format!("pid:{pid}");
+                app.set_query(format!("pid:{pid}"));
                 app.refilter();
             }
         }
@@ -304,5 +342,172 @@ fn send_signal(app: &mut App, pid: i32, sig: nix::sys::signal::Signal, label: &s
         Err(Errno::EPERM) => app.set_flash(format!("EPERM: signal SIG{label} to PID {pid} denied")),
         Err(Errno::ESRCH) => app.set_flash(format!("ESRCH: PID {pid} no longer exists")),
         Err(e) => app.set_flash(format!("kill PID {pid} SIG{label}: {e}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn press(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    fn press_mod(code: KeyCode, m: KeyModifiers) -> KeyEvent {
+        KeyEvent::new(code, m)
+    }
+
+    fn type_str(app: &mut App, s: &str) {
+        for c in s.chars() {
+            handle_search_key(app, press(KeyCode::Char(c)));
+        }
+    }
+
+    #[test]
+    fn search_mid_string_insert() {
+        let mut app = App::new(String::new(), false);
+        type_str(&mut app, "abc"); // caret at end (3)
+        handle_search_key(&mut app, press(KeyCode::Left)); // caret 2
+        handle_search_key(&mut app, press(KeyCode::Left)); // caret 1
+        handle_search_key(&mut app, press(KeyCode::Char('X'))); // insert at 1
+        assert_eq!(app.query_str(), "aXbc");
+        assert_eq!(app.query_input.cursor(), 2);
+    }
+
+    #[test]
+    fn search_word_motions_alt_b_f() {
+        let mut app = App::new(String::new(), false);
+        type_str(&mut app, "foo bar baz"); // caret 11
+        handle_search_key(&mut app, press_mod(KeyCode::Char('b'), KeyModifiers::ALT));
+        assert_eq!(app.query_input.cursor(), 8); // start of "baz"
+        handle_search_key(&mut app, press_mod(KeyCode::Char('b'), KeyModifiers::ALT));
+        assert_eq!(app.query_input.cursor(), 4); // start of "bar"
+        handle_search_key(&mut app, press_mod(KeyCode::Char('f'), KeyModifiers::ALT));
+        assert_eq!(app.query_input.cursor(), 8); // forward to "baz"
+    }
+
+    #[test]
+    fn search_word_motions_ctrl_arrows() {
+        let mut app = App::new(String::new(), false);
+        type_str(&mut app, "foo bar"); // caret 7
+        handle_search_key(&mut app, press_mod(KeyCode::Left, KeyModifiers::CONTROL));
+        assert_eq!(app.query_input.cursor(), 4); // start of "bar"
+        handle_search_key(&mut app, press_mod(KeyCode::Right, KeyModifiers::CONTROL));
+        assert_eq!(app.query_input.cursor(), 7); // end
+    }
+
+    #[test]
+    fn search_delete_word_back_ctrl_w() {
+        let mut app = App::new(String::new(), false);
+        type_str(&mut app, "foo bar"); // caret 7
+        handle_search_key(
+            &mut app,
+            press_mod(KeyCode::Char('w'), KeyModifiers::CONTROL),
+        );
+        assert_eq!(app.query_str(), "foo ");
+    }
+
+    #[test]
+    fn search_kill_to_end_ctrl_k() {
+        let mut app = App::new(String::new(), false);
+        type_str(&mut app, "hello world"); // caret 11
+        handle_search_key(&mut app, press(KeyCode::Home)); // caret 0
+        for _ in 0..5 {
+            handle_search_key(&mut app, press(KeyCode::Right)); // caret 5 (after "hello")
+        }
+        handle_search_key(
+            &mut app,
+            press_mod(KeyCode::Char('k'), KeyModifiers::CONTROL),
+        );
+        assert_eq!(app.query_str(), "hello");
+    }
+
+    #[test]
+    fn search_kill_to_start_ctrl_u_readline() {
+        let mut app = App::new(String::new(), false);
+        type_str(&mut app, "hello world");
+        // Move caret to just before "world" (codepoint 6).
+        handle_search_key(&mut app, press(KeyCode::Home));
+        for _ in 0..6 {
+            handle_search_key(&mut app, press(KeyCode::Right));
+        }
+        handle_search_key(
+            &mut app,
+            press_mod(KeyCode::Char('u'), KeyModifiers::CONTROL),
+        );
+        assert_eq!(app.query_str(), "world");
+        assert_eq!(app.query_input.cursor(), 0);
+    }
+
+    #[test]
+    fn reserved_tab_focuses_tree() {
+        let mut app = App::new(String::new(), false);
+        assert_eq!(app.focus, Focus::Search);
+        handle_search_key(&mut app, press(KeyCode::Tab));
+        assert_eq!(app.focus, Focus::Tree);
+    }
+
+    #[test]
+    fn reserved_esc_clears_query() {
+        let mut app = App::new(String::new(), false);
+        type_str(&mut app, "abc");
+        handle_search_key(&mut app, press(KeyCode::Esc));
+        assert_eq!(app.query_str(), "");
+        // Esc stays in the search box.
+        assert_eq!(app.focus, Focus::Search);
+    }
+
+    #[test]
+    fn reserved_enter_focuses_tree() {
+        let mut app = App::new(String::new(), false);
+        handle_search_key(&mut app, press(KeyCode::Enter));
+        assert_eq!(app.focus, Focus::Tree);
+    }
+
+    #[test]
+    fn reserved_ctrl_n_p_do_not_type_into_query() {
+        let mut app = App::new(String::new(), false);
+        handle_search_key(
+            &mut app,
+            press_mod(KeyCode::Char('n'), KeyModifiers::CONTROL),
+        );
+        handle_search_key(
+            &mut app,
+            press_mod(KeyCode::Char('p'), KeyModifiers::CONTROL),
+        );
+        assert_eq!(app.query_str(), "");
+    }
+
+    #[test]
+    fn question_mark_types_literally_when_search_focused() {
+        let mut app = App::new(String::new(), false);
+        // `?` usually arrives with SHIFT; tui-input inserts it regardless.
+        handle_key(&mut app, press_mod(KeyCode::Char('?'), KeyModifiers::SHIFT));
+        assert!(!app.help_open);
+        assert_eq!(app.query_str(), "?");
+    }
+
+    #[test]
+    fn question_mark_opens_help_from_tree() {
+        let mut app = App::new(String::new(), false);
+        app.focus = Focus::Tree;
+        handle_key(&mut app, press(KeyCode::Char('?')));
+        assert!(app.help_open);
+    }
+
+    #[test]
+    fn f1_opens_help_from_search() {
+        let mut app = App::new(String::new(), false);
+        assert_eq!(app.focus, Focus::Search);
+        handle_key(&mut app, press(KeyCode::F(1)));
+        assert!(app.help_open);
+    }
+
+    #[test]
+    fn f1_closes_open_help() {
+        let mut app = App::new(String::new(), false);
+        app.help_open = true;
+        handle_key(&mut app, press(KeyCode::F(1)));
+        assert!(!app.help_open);
     }
 }

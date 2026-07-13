@@ -1,5 +1,7 @@
 use std::{collections::HashSet, sync::Arc, time::Instant};
 
+use tui_input::Input;
+
 use crate::{
     app::event::Focus,
     consts::{ERROR_FLASH_DURATION, SCROLLOFF},
@@ -21,7 +23,9 @@ pub struct App {
     pub quit: bool,
 
     pub focus: Focus,
-    pub query_text: String,
+    /// Single-line search buffer with a movable caret (Unicode-width aware).
+    /// The query string is `query_input.value()`; `query_str()` is the accessor.
+    pub query_input: Input,
     pub query: Query,
     /// Compiled parallel of `query` (regexes for string terms). Derived state,
     /// recomputed alongside `query` in `refilter`; `query` stays canonical for
@@ -40,7 +44,7 @@ pub struct App {
     pub tree_visible: Vec<TreeNode>,
     pub tree_cursor: usize,
     pub tree_offset: usize,
-    /// (Arc<Snapshot> ptr as usize, query_text). When this matches, no rebuild.
+    /// (Arc<Snapshot> ptr as usize, query string). When this matches, no rebuild.
     pub tree_cache_key: Option<(usize, String)>,
     /// ProcessId currently under the tree cursor — used to re-anchor across
     /// rebuilds when the same PID is still visible.
@@ -58,7 +62,7 @@ pub struct App {
 
 pub fn hint_for(focus: Focus) -> &'static str {
     match focus {
-        Focus::Search => "type to filter | Esc reset | Enter→tree | ?→help",
+        Focus::Search => "type to filter | Esc reset | Enter→tree | F1 help",
         Focus::Tree => "j/k | Enter drill | K signal | space pause | Tab→search | ?→help",
     }
 }
@@ -111,11 +115,21 @@ impl App {
         let query = parse(&boot.query_text);
         let compiled = CompiledQuery::compile(&query);
         let pending_cursor_id = boot.cursor_id();
+        // Restore the caret when the state file recorded one; a `None`
+        // (older file) leaves the caret at end of the restored query.
+        let query_cursor = boot.query_cursor;
+        let query_input = {
+            let input = Input::new(boot.query_text);
+            match query_cursor {
+                Some(c) => input.with_cursor(c),
+                None => input,
+            }
+        };
         Self {
             latest: None,
             quit: false,
             focus: boot.focus.into(),
-            query_text: boot.query_text,
+            query_input,
             query,
             compiled,
             paused: boot.paused,
@@ -134,11 +148,31 @@ impl App {
         }
     }
 
+    /// The current search-query text.
+    pub fn query_str(&self) -> &str {
+        self.query_input.value()
+    }
+
+    /// Replace the search buffer, placing the caret at the end of `value`.
+    pub fn set_query(&mut self, value: String) {
+        self.query_input = Input::new(value);
+    }
+
+    /// Readline `Ctrl-u`: delete from the start of the line up to the caret,
+    /// leaving the caret at column 0. `tui-input` has no such request (its
+    /// native `Ctrl-u` kills the whole line), so it is rebuilt by hand.
+    pub fn query_kill_to_start(&mut self) {
+        let cursor = self.query_input.cursor();
+        let tail: String = self.query_input.value().chars().skip(cursor).collect();
+        self.query_input = Input::new(tail).with_cursor(0);
+    }
+
     /// Snapshot the user-facing session fields for persistence. Reads the live
     /// cursor anchor (`tree_cursor_id`) so a moved cursor is captured.
     pub fn persisted_state(&self) -> PersistedState {
         PersistedState {
-            query_text: self.query_text.clone(),
+            query_text: self.query_str().to_string(),
+            query_cursor: Some(self.query_input.cursor()),
             focus: self.focus.into(),
             paused: self.paused,
             hide_kernel_threads: self.hide_kernel_threads,
@@ -160,7 +194,7 @@ impl App {
 
     /// Recompute the matched-PID set from the current query text.
     pub fn refilter(&mut self) {
-        self.query = parse(&self.query_text);
+        self.query = parse(self.query_str());
         self.compiled = CompiledQuery::compile(&self.query);
         self.matched_pids.clear();
         let Some(snap) = self.latest.as_deref() else {
@@ -211,7 +245,7 @@ impl App {
             return;
         };
 
-        let key = (Arc::as_ptr(&snap) as usize, self.query_text.clone());
+        let key = (Arc::as_ptr(&snap) as usize, self.query_str().to_string());
         if self.tree_cache_key.as_ref() == Some(&key) {
             return;
         }
@@ -392,7 +426,7 @@ mod tests {
         app.tree_cursor_id = Some(s.processes[app.tree_visible[pos2].proc_idx].id);
 
         // Filter to pid:4 → pid 2 gets pruned from the visible tree.
-        app.query_text = "pid:4".into();
+        app.set_query("pid:4".to_string());
         app.refilter();
         app.ensure_tree_built();
         // Visible should be {1, 3, 4}; cursor jumps to first match (pid 4).
@@ -532,6 +566,7 @@ mod tests {
     fn from_boot_restores_focus_paused_query() {
         let boot = PersistedState {
             query_text: "name:foo".to_string(),
+            query_cursor: None,
             focus: crate::persist::PersistedFocus::Tree,
             paused: true,
             hide_kernel_threads: true,
@@ -539,7 +574,7 @@ mod tests {
             cursor_start_time: Some(3),
         };
         let app = App::from_boot(boot);
-        assert_eq!(app.query_text, "name:foo");
+        assert_eq!(app.query_str(), "name:foo");
         assert_eq!(app.focus, Focus::Tree);
         assert!(app.paused);
         assert!(app.hide_kernel_threads);
@@ -633,5 +668,63 @@ mod tests {
         assert_eq!(ps.cursor_start_time, Some(4));
         assert_eq!(ps.query_text, "");
         assert_eq!(ps.focus, crate::persist::PersistedFocus::Search);
+    }
+
+    #[test]
+    fn query_cursor_restored_from_boot() {
+        let boot = PersistedState {
+            query_text: "hello".to_string(),
+            query_cursor: Some(2),
+            ..PersistedState::default()
+        };
+        let app = App::from_boot(boot);
+        assert_eq!(app.query_str(), "hello");
+        assert_eq!(app.query_input.cursor(), 2);
+    }
+
+    #[test]
+    fn query_cursor_defaults_to_end_when_absent() {
+        // Older state file (no query_cursor) → caret restored at end of query.
+        let boot = PersistedState {
+            query_text: "hello".to_string(),
+            query_cursor: None,
+            ..PersistedState::default()
+        };
+        let app = App::from_boot(boot);
+        assert_eq!(app.query_input.cursor(), 5);
+    }
+
+    #[test]
+    fn query_cursor_clamped_when_beyond_value() {
+        // A stale/oversized cursor is clamped to the query length by `with_cursor`.
+        let boot = PersistedState {
+            query_text: "hi".to_string(),
+            query_cursor: Some(99),
+            ..PersistedState::default()
+        };
+        let app = App::from_boot(boot);
+        assert_eq!(app.query_input.cursor(), 2);
+    }
+
+    #[test]
+    fn persisted_state_round_trips_query_cursor() {
+        let mut app = App::new(String::new(), false);
+        app.query_input = Input::new("hello world".to_string()).with_cursor(4);
+        let ps = app.persisted_state();
+        assert_eq!(ps.query_cursor, Some(4));
+        assert_eq!(ps.query_text, "hello world");
+
+        let app2 = App::from_boot(ps);
+        assert_eq!(app2.query_str(), "hello world");
+        assert_eq!(app2.query_input.cursor(), 4);
+    }
+
+    #[test]
+    fn query_kill_to_start_removes_prefix_and_resets_caret() {
+        let mut app = App::new(String::new(), false);
+        app.query_input = Input::new("hello world".to_string()).with_cursor(6);
+        app.query_kill_to_start();
+        assert_eq!(app.query_str(), "world");
+        assert_eq!(app.query_input.cursor(), 0);
     }
 }

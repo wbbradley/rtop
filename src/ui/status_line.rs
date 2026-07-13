@@ -168,7 +168,7 @@ mod tests {
         let app = app_with_stats();
         let row = render_row(&app, 200);
         assert!(row.contains("mem: 512MiB/1.0GiB"), "missing stats: {row:?}");
-        assert!(row.contains("?→help"), "missing hint tail: {row:?}");
+        assert!(row.contains("F1 help"), "missing hint tail: {row:?}");
     }
 
     #[test]

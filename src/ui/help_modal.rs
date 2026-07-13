@@ -26,11 +26,17 @@ pub fn render(frame: &mut Frame, full_area: Rect, _app: &App) {
 fn content() -> Vec<Line<'static>> {
     vec![
         section("[ search ]"),
-        binding("Tab/S-Tab", "jump to tree"),
+        binding("Tab/S-Tab", "focus tree"),
+        binding("Enter", "focus tree (first match)"),
         binding("Esc", "clear query"),
         binding("Ctrl-n/p", "move tree cursor"),
         binding(",", "OR groups"),
-        binding("Enter", "jump to tree (first match)"),
+        binding("←/→ ^b/^f", "move by char"),
+        binding("M-b/f ^←/→", "move by word"),
+        binding("Home/End", "line start / end"),
+        binding("^w", "delete word back"),
+        binding("^k / ^u", "kill to end / start"),
+        binding("?", "types literally (F1 = help)"),
         Line::from(""),
         section("[ tree ]"),
         binding("j/k gg G", "navigate"),
@@ -40,10 +46,8 @@ fn content() -> Vec<Line<'static>> {
         binding("space", "pause sampling"),
         binding("/", "clear query, focus search"),
         binding("Esc/Tab", "focus search"),
-        Line::from(""),
-        section("[ any ]"),
-        binding("?", "toggle this help"),
-        binding("Ctrl-C", "quit"),
+        binding("?", "open this help"),
+        section("[ any ]:  F1 help   Ctrl-C quit"),
     ]
 }
 
