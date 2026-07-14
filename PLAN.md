@@ -4,7 +4,105 @@ A TUI process monitor in the spirit of `top`/`htop`, with vim-style navigation, 
 
 ## Next Up
 
-_(No queued tasks.)_
+### Search DSL negation (fzf-style `!` exclusion terms)
+
+Add per-term negation to the search DSL via a leading `!`, using **fzf-style,
+fully commutative** semantics. The top level stays **OR of comma-groups**; each
+comma-group is an **AND of terms**; a term is positive or negated. Reordering
+comma-groups (OR) or terms within a group (AND) never changes the result — there
+is no ordering, no last-rule-wins, no linear narrowing.
+
+**Match rule.** A process matches a comma-group iff it matches **all** positive
+terms **and none** of the negated terms in that group. It matches the query iff
+it matches **any** comma-group. Empty query still matches everything.
+Examples: `python !test` → "python but not test"; `python !test,ruby !spec` →
+"(python AND not test) OR (ruby AND not spec)"; `!test` alone → everything not
+matching `test`.
+
+**Backward compatibility.** A query with no `!` is exactly today's OR-of-AND-
+groups; the regression tests below must prove identical matched sets.
+
+#### Parser (`src/search/parser.rs`)
+
+- Add polarity to `Term` — e.g. `Prefixed { field, value, negated: bool }` and
+  `Bare { value, negated: bool }` (or wrap the existing enum in a `negated`
+  field). Update `push_term` (parser.rs:70-97) to detect a leading `!` on the
+  comma-fragment **before** the typed-prefix `split_once(':')`, strip it, set
+  `negated = true`, then parse the remainder exactly as today.
+- `!user:root` negates the typed term; only a leading `!` on the fragment is the
+  marker, so `name:!foo` keeps `!` as part of the regex value (searches regex
+  `!foo`). Leading `!` is always the negation marker — searching for a literal
+  leading `!` is unsupported in v1 (no `\!` escape).
+- A negated `pid:` term must **not** set `auto_select_pid`: guard the existing
+  first-valid-pid logic (parser.rs:77-79) on `!negated`.
+
+#### Compile (`src/search/compiled.rs`)
+
+- Carry `negated` onto `CompiledTerm` (a bool field is simplest).
+- `highlight` collects regexes from **positive string terms only** — skip
+  pushing negated terms into the highlight set in `compile_str` (compiled.rs).
+- `has_invalid` / `empty` semantics unchanged; a negated invalid regex still sets
+  `has_invalid` (drives the dim hint).
+
+#### Filter (`src/search/filter.rs`)
+
+- Rewrite `matches` (filter.rs:8-15) as: `cq.is_empty()` → `true`; else
+  `groups.any(|g| g.iter().all(|t| term_ok(p, t)))`.
+- `term_ok` must keep invalid/`Never` **non-constraining in both polarities** so
+  a negated invalid term never culls:
+  - `Invalid` → `true` regardless of `negated` (so `!fire(` never blanks the
+    tree, matching today's inclusion behavior).
+  - Otherwise compute the raw predicate `m` (today's `term_matches`, filter.rs:
+    17-36); return `if negated { !m } else { m }`. `Never` yields `m = false`,
+    so a positive `!ppid:x`-style term fails the group (as today) and a negated
+    one is `true` (a never-matching term, negated, excludes nothing).
+
+#### Renderer / status-line
+
+- No change required: `tree_view.rs` highlighting consumes `highlight_regexes()`
+  (now positive-only) and `status_line.rs` still keys the dim invalid-regex hint
+  off `has_invalid()`.
+
+#### app/state.rs
+
+- No change required: `refilter` (state.rs:196-214) and `ensure_tree_built`'s
+  `matched_arg` (state.rs:255-259) still key off `query.groups.is_empty()` and
+  `matched_pids`; the visible-tree closure logic is untouched.
+
+#### PLAN.md doc updates (part of this task)
+
+- In the **Search DSL** reference section, replace "No negation in v1." with the
+  fzf per-term negation rule described above.
+- Remove "search negation" from the **Out of v1 scope** list.
+
+#### Tests
+
+- `parser.rs`: `!` sets `negated`; `!user:root` is a negated typed term;
+  `name:!foo` is **not** negated (value `!foo`); `!pid:1` does not set
+  `auto_select_pid`; commutativity (reordering terms/groups yields equal match
+  sets).
+- `filter.rs`: `python !test` = python AND not test; `!test` alone = everything
+  not matching test; `!fire(` (invalid) culls nothing; `!ppid:x` culls nothing;
+  **regression**: existing negation-free cases (`a,b,e`; `a b,c`;
+  `name:firefox,name:vim`; AND-within-group; invalid-skipped-in-group) produce
+  identical results.
+- `compiled.rs`: negated terms excluded from `highlight_regexes()`; a negated
+  invalid term still flags `has_invalid`.
+
+#### Acceptance criteria
+
+1. Any query with **no** `!` produces identical matched sets to the pre-change
+   build (proven by the regression tests).
+2. `!term` excludes processes matching `term`, and negation composes per-term
+   inside a group (`python !test`).
+3. Fully commutative: reordering comma-groups or terms within a group never
+   changes results.
+4. An incomplete negated regex (`!fire(`) never empties the tree; the dim
+   invalid-regex hint shows.
+5. `!`-negated substrings are not painted amber in tree rows.
+6. `!pid:X` does not auto-select / move the tree cursor.
+7. `cargo test` and `cargo clippy` clean; `cargo fmt` applied.
+8. The Search DSL and Out-of-scope sections of PLAN.md are updated.
 
 ## Architecture Reference
 
