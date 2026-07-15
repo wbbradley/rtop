@@ -558,3 +558,45 @@ Original PLAN.md entry (verbatim):
 > - Unit tests: mid-string insert, word-left/right, delete-word-back, kill-to-end, kill-to-start, that reserved keys still perform focus/nav actions, and that `query_cursor` round-trips through persistence.
 >
 > Commit semantically, e.g. `feat: rich cursor editing in search box via tui-input`.
+
+## Default two-second refresh cadence
+
+Changed the default process sampling and UI refresh cadence from five seconds to two by updating
+the shared `SAMPLE_INTERVAL` constant; clap continues to derive `--interval`'s default from that
+constant and still accepts fractional overrides. Updated the CLI documentation, Architecture
+Reference, and changelog while leaving the sampler loop, pause behavior, interval-relative CPU
+calculation, and historical five-second records untouched. Verified `[default: 2]` in generated
+help, a `--interval 0.5` parse, formatting, all 150 tests, and clippy with warnings denied.
+
+Original PLAN.md entry (verbatim):
+
+> ### Default two-second refresh cadence
+>
+> Change rtop's default process sampling and UI refresh cadence from 5 seconds to
+> 2 seconds. Keep `--interval <secs>` as an explicit per-run override; this task
+> only changes the default used when the flag is omitted. CPU percentage
+> calculation remains interval-relative and must not be otherwise altered.
+>
+> #### Implementation and documentation
+>
+> - In `src/consts.rs`, change `SAMPLE_INTERVAL` from 5 seconds to 2 seconds.
+>   `src/main.rs` already derives clap's `--interval` default from this constant;
+>   update its stale `5.0s` doc comment to `2.0s` without duplicating a separate
+>   numeric runtime default.
+> - Update both 5-second references in this Architecture Reference's **Refresh &
+>   threading** and **Constants discipline** sections to 2 seconds.
+> - Add a changelog entry recording the faster default and noting that
+>   `--interval 5` restores the prior cadence.
+>
+> #### Verification and acceptance criteria
+>
+> 1. Running `rtop` without `--interval` samples every 2 seconds, and
+>    `cargo run -- --help` reports `[default: 2]`.
+> 2. `--interval <secs>` continues to override the default, including fractional
+>    positive values accepted by the current CLI.
+> 3. Sampling pause behavior and interval-relative CPU percentage calculations
+>    are unchanged.
+> 4. All code and Architecture Reference mentions of the active default agree on
+>    2 seconds; historical 5-second entries in `CHANGELOG.md` and `COMPLETED.md`
+>    remain intact.
+> 5. `cargo fmt --check`, `cargo test`, and `cargo clippy` pass.

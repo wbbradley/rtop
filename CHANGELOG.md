@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Changed
+- The default sample/refresh interval is now 2 seconds (was 5 seconds). Pass `--interval 5` to restore the prior cadence.
+
 ## [0.3.0] - 2026-07-13
 
 ### Breaking Changes

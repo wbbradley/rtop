@@ -21,7 +21,7 @@ use source::ProcessSource;
 #[derive(Parser, Debug)]
 #[command(name = "rtop", version, about = "TUI process monitor")]
 struct Cli {
-    /// Sample interval in seconds. Default mirrors `consts::SAMPLE_INTERVAL` (5.0s).
+    /// Sample interval in seconds. Default mirrors `consts::SAMPLE_INTERVAL` (2.0s).
     #[arg(long, default_value_t = consts::SAMPLE_INTERVAL.as_secs_f64())]
     interval: f64,
 

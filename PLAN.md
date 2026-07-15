@@ -130,7 +130,7 @@ Search box state is canonical. The tree pane shows the closure of the matched-PI
 ### Refresh & threading
 
 - One sampler thread, one main/UI thread. No tokio. Channel: `crossbeam-channel` carrying `Arc<Snapshot>`.
-- Sampler ticks every `SAMPLE_INTERVAL` (default 5s). UI renders on union of {keypress, new snapshot, terminal resize}.
+- Sampler ticks every `SAMPLE_INTERVAL` (default 2s). UI renders on union of {keypress, new snapshot, terminal resize}.
 - CPU% computed in sampler from `(prev_utime + prev_stime)` vs current; identity is `(pid, start_time)` to handle PID reuse.
 - `space` toggles sampling pause.
 
@@ -196,7 +196,7 @@ src/
 
 No magic numbers anywhere. All tunables live in `consts.rs`:
 
-- `SAMPLE_INTERVAL: Duration` (5s)
+- `SAMPLE_INTERVAL: Duration` (2s)
 - `SCROLLOFF: usize` (3)
 - `TREE_HALF_PAGE: usize` (10)
 - `MIN_COLS: u16` (80), `MIN_ROWS: u16` (24)

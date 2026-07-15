@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use ratatui::style::Color;
 
-pub const SAMPLE_INTERVAL: Duration = Duration::from_secs(5);
+pub const SAMPLE_INTERVAL: Duration = Duration::from_secs(2);
 pub const SCROLLOFF: usize = 3;
 pub const TREE_HALF_PAGE: usize = 10;
 pub const SEARCH_BOX_HEIGHT: u16 = 3;
