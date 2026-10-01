@@ -350,8 +350,11 @@ fn continuation_prefix(node: &TreeNode) -> String {
         }
     }
     if node.depth > 0 {
-        // Blank where the first line had `└─ ` / `├─ `.
-        s.push_str("   ");
+        // Keep the connection to later siblings across wrapped command lines.
+        match node.gutter_kind {
+            GutterKind::Branch => s.push_str("│  "),
+            GutterKind::Leaf => s.push_str("   "),
+        }
     }
     s
 }
@@ -490,6 +493,60 @@ mod tests {
 
     fn s(x: &str) -> String {
         x.to_string()
+    }
+
+    #[test]
+    fn wrapped_rows_preserve_connections_to_later_siblings() {
+        let p = Process {
+            id: crate::process::ProcessId {
+                pid: 42,
+                start_time: 0,
+            },
+            ppid: 1,
+            uid: 0,
+            user: s("u"),
+            name: s("command"),
+            cmdline: vec![s("aaaa"), s("bbbb"), s("cccc")],
+            state: 'S',
+            rss_bytes: 0,
+            cpu_pct: None,
+            cpu_time_total: std::time::Duration::ZERO,
+            age: std::time::Duration::ZERO,
+            is_kernel_thread: false,
+        };
+
+        for (ancestors_last, kind, first_gutter, continuation_gutter) in [
+            (vec![], GutterKind::Branch, "├─ ", "│  "),
+            (vec![], GutterKind::Leaf, "└─ ", "   "),
+            (
+                vec![false, true],
+                GutterKind::Branch,
+                "│     ├─ ",
+                "│     │  ",
+            ),
+            (
+                vec![false, true],
+                GutterKind::Leaf,
+                "│     └─ ",
+                "│        ",
+            ),
+        ] {
+            let node = TreeNode {
+                proc_idx: 0,
+                depth: ancestors_last.len() + 1,
+                gutter_kind: kind,
+                is_last_child: kind == GutterKind::Leaf,
+                ancestors_last,
+            };
+            let pane_width = METADATA_PREFIX_WIDTH + first_gutter.chars().count() + 4;
+            let lines = build_row(&p, &node, None, pane_width, &[]);
+            let text: Vec<String> = lines.iter().map(ToString::to_string).collect();
+            assert_eq!(text.len(), 3);
+            assert!(text[0].ends_with(&format!("{first_gutter}aaaa")));
+            let padding = " ".repeat(METADATA_PREFIX_WIDTH);
+            assert_eq!(text[1], format!("{padding}{continuation_gutter}bbbb"));
+            assert_eq!(text[2], format!("{padding}{continuation_gutter}cccc"));
+        }
     }
 
     // ---- wrap_argv ----
