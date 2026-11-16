@@ -1,6 +1,6 @@
 # rtop
 
-A TUI process monitor in the spirit of `top`/`htop`, with vim-style navigation, a substring search box driving a load-sorted list, and a context-sensitive process tree below.
+A TUI process monitor in the spirit of `top`/`htop`, with vim-style navigation and a regex search box that filters a context-sensitive process tree below.
 
 ## Status
 
@@ -11,6 +11,8 @@ Early development; see [PLAN.md](PLAN.md) for roadmap.
 - **Vim-style two-pane TUI**: search box on top, process tree below. The tree filters itself directly off the query — no intermediate sorted list.
 - **Regex search DSL**: `pid:`, `ppid:`, `user:`, `name:`, `cmd:`, `state:` prefixes; bare terms search across name+cmdline+user. String-valued terms (`user:`/`name:`/`cmd:` and bare terms) are case-insensitive, unanchored regexes (`^`/`$` anchors, `(?-i)` for case sensitivity); `pid:`/`ppid:` are integer equality and `state:` is single-char. Space-separated terms within a group are AND-ed; a comma separates OR-groups. An invalid regex is skipped (never blanks the tree) with a dim "invalid regex" hint.
 - **Match-driven tree**: every matching process is shown together with its full parent chain (root → match) and its complete subtree, with matched substrings highlighted in amber. Multiple disjoint matches become separate roots; empty query shows the full forest. Tree cursor navigates with `j`/`k`/`gg`/`G`/Ctrl-d/Ctrl-u; `Enter` drills into a PID.
+- **Readline-style search editing**: move by character (`←`/`→`, Ctrl-b/Ctrl-f) or word (Alt-b/Alt-f, Ctrl-←/→), `Home`/`End`, Ctrl-w to delete a word, Ctrl-k/Ctrl-u to kill to end/start. The caret position is restored with the session.
+- **Help**: `F1` opens the key-binding help from anywhere; `?` also opens it from the tree (in the search box `?` types a literal character).
 - **Signal sending**: press `K` in the tree to open the signal modal (TERM/KILL/HUP/INT/USR1/USR2/STOP/CONT). Confirms PID 1 and self-signal.
 - **Pause** sampling with `space`; resume with `space`.
 - **Session persistence**: the search query, pane focus, paused state, hide-kernel-threads, and the tree cursor's process are saved to a per-user state file and restored on the next launch, so a restart resumes where you left off. `--no-restore` starts fresh (and does not save).

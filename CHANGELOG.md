@@ -4,8 +4,20 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-16
+
+### Added
+- Readline-style cursor editing in the search box: move by character (`←`/`→`, Ctrl-b/Ctrl-f) or by word (Alt-b/Alt-f, Ctrl-←/Ctrl-→), `Home`/`End`, Ctrl-w to delete the previous word, and Ctrl-k/Ctrl-u to delete to the end/start of the line. Text can now be inserted mid-query.
+- The search box's caret position is saved and restored with the session.
+- `F1` opens (and closes) the help modal from any pane.
+
 ### Changed
+- `?` no longer opens help while the search box is focused; it types a literal `?` (useful in regexes). Use `F1`, or press `?` from the tree.
 - The default sample/refresh interval is now 2 seconds (was 5 seconds). Pass `--interval 5` to restore the prior cadence.
+- Removed the 80×24 minimum terminal size. rtop now renders its normal UI at any size instead of showing a "terminal too small" message.
+
+### Fixed
+- Tree branch lines (`│`) now continue through wrapped command lines instead of breaking.
 
 ## [0.3.0] - 2026-07-13
 
