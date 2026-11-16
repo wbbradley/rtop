@@ -169,7 +169,7 @@ struct Snapshot {
 ```
 src/
   main.rs
-  consts.rs                 — all global constants (SAMPLE_INTERVAL, MIN_COLS, etc.)
+  consts.rs                 — all global constants (SAMPLE_INTERVAL, SCROLLOFF, etc.)
   app.rs                    — top-level app state + event loop
   app/state.rs
   app/event.rs              — Key/Snapshot/Resize event union
@@ -199,7 +199,6 @@ No magic numbers anywhere. All tunables live in `consts.rs`:
 - `SAMPLE_INTERVAL: Duration` (2s)
 - `SCROLLOFF: usize` (3)
 - `TREE_HALF_PAGE: usize` (10)
-- `MIN_COLS: u16` (80), `MIN_ROWS: u16` (24)
 - `ERROR_FLASH_DURATION: Duration` (3s)
 - `CPU_WARN_PCT: f32` (50.0), `CPU_DANGER_PCT: f32` (80.0)
 

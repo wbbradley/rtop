@@ -1,13 +1,13 @@
 use ratatui::{
     Frame,
-    layout::{Alignment, Constraint, Direction, Layout, Rect},
+    layout::{Alignment, Constraint, Direction, Layout},
     style::Style,
     widgets::{Block, Paragraph},
 };
 
 use crate::{
     app::{event::Focus, state::App},
-    consts::{FOCUS_ACCENT, MIN_COLS, MIN_ROWS, SEARCH_BOX_HEIGHT, STATUS_LINE_HEIGHT},
+    consts::{FOCUS_ACCENT, SEARCH_BOX_HEIGHT, STATUS_LINE_HEIGHT},
 };
 
 pub fn focused_block(title: &'static str, focused: bool) -> Block<'static> {
@@ -28,11 +28,6 @@ pub mod tree_view;
 
 pub fn draw(frame: &mut Frame, app: &App) {
     let area = frame.area();
-
-    if area.width < MIN_COLS || area.height < MIN_ROWS {
-        render_too_small(frame, area);
-        return;
-    }
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -63,24 +58,4 @@ pub fn draw(frame: &mut Frame, app: &App) {
     if app.signal_modal.is_some() {
         signal_modal::render(frame, area, app);
     }
-}
-
-fn render_too_small(frame: &mut Frame, area: Rect) {
-    let msg = format!(
-        "terminal too small ({}×{} < {}×{})",
-        area.width, area.height, MIN_COLS, MIN_ROWS
-    );
-    let row = if area.height == 0 {
-        return;
-    } else {
-        area.height / 2
-    };
-    let strip = Rect {
-        x: area.x,
-        y: area.y + row,
-        width: area.width,
-        height: 1,
-    };
-    let p = Paragraph::new(msg).alignment(Alignment::Center);
-    frame.render_widget(p, strip);
 }

@@ -727,4 +727,27 @@ mod tests {
         assert_eq!(app.query_str(), "world");
         assert_eq!(app.query_input.cursor(), 0);
     }
+
+    #[test]
+    fn draw_does_not_panic_at_tiny_sizes() {
+        use ratatui::{Terminal, backend::TestBackend};
+
+        let mut app = App::new(String::new(), false);
+        app.latest = Some(snap());
+        app.refilter();
+        app.ensure_tree_built();
+        app.help_open = true;
+        app.signal_modal = Some(SignalModal {
+            target_pid: 4,
+            target_label: "proc".to_string(),
+            cursor: 0,
+            awaiting_confirm: false,
+        });
+        for w in 0..12 {
+            for h in 0..12 {
+                let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
+                terminal.draw(|f| crate::ui::draw(f, &app)).unwrap();
+            }
+        }
+    }
 }
